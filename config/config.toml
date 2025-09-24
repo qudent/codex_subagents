@@ -1,0 +1,4 @@
+# Append or merge this snippet into ~/.codex/config.toml so Codex CLI loads the subagents MCP server.
+[mcp_servers.subagents]
+command = "node"
+args = ["~/.codex/mcp/subagents.mjs"]
