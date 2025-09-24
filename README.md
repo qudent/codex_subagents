@@ -20,6 +20,7 @@ Source the helpers for your current shell and future sessions:
 source ~/.codex/agents.zsh
 # optionally add the same line to ~/.zshrc
 ```
+The helper preserves your existing `set -o` strict-mode choices, so sourcing it won't leave options like `nounset` enabled unexpectedly—a common cause of `RPROMPT: parameter not set` errors in customized prompts.
 
 ## Usage
 - `agent_spawn "Describe the task"`

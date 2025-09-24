@@ -1,10 +1,22 @@
 #!/usr/bin/env zsh
 # Codex subagent helpers sourced by your interactive shell.
+
+# Preserve caller shell options so sourcing this file stays side-effect free.
+typeset -A __codex_saved_opts
+for __codex_opt in errexit nounset pipefail; do
+  if [[ -o $__codex_opt ]]; then
+    __codex_saved_opts[$__codex_opt]=1
+  else
+    __codex_saved_opts[$__codex_opt]=0
+  fi
+done
+
 set -euo pipefail
 
 _applescript_escape(){ sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 agent_spawn(){
+  setopt localoptions errexit nounset pipefail
   git rev-parse --is-inside-work-tree >/dev/null || { echo "Not in a git repo"; return 1; }
   local desc="${*:-(no description)}"
   local repo_root prev_branch ts rnd slug branch worktree now_iso env_snapshot
@@ -91,6 +103,7 @@ APPLESCRIPT
 }
 
 agent_status(){
+  setopt localoptions errexit nounset pipefail
   local branch="${1:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_status <branch>"; return 1; }
   local repo_root agents
@@ -105,6 +118,7 @@ agent_status(){
 }
 
 agent_await(){
+  setopt localoptions errexit nounset pipefail
   local branch="${1:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_await <branch>"; return 1; }
   local repo_root wt agents
@@ -144,6 +158,7 @@ agent_await(){
 }
 
 agent_watch_all(){
+  setopt localoptions errexit nounset pipefail
   local repo_root
   repo_root="$(git rev-parse --show-toplevel)"
   while true; do
@@ -159,6 +174,7 @@ agent_watch_all(){
 }
 
 agent_cleanup(){
+  setopt localoptions errexit nounset pipefail
   local branch="${1:-}"
   local flag="${2:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_cleanup <branch> [--force]"; return 1; }
@@ -200,3 +216,12 @@ agent_cleanup(){
 
   return $status
 }
+
+for __codex_opt in errexit nounset pipefail; do
+  if (( __codex_saved_opts[$__codex_opt] )); then
+    set -o $__codex_opt
+  else
+    set +o $__codex_opt
+  fi
+done
+unset __codex_opt __codex_saved_opts
