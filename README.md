@@ -24,11 +24,34 @@ source ~/.codex/agents.zsh
 The helper preserves your existing `set -o` strict-mode choices, so sourcing it won't leave options like `nounset` enabled unexpectedly—a common cause of `RPROMPT: parameter not set` errors in customized prompts.
 
 ## Usage
+You now have two ways to drive subagents:
+
+1. Source `scripts/agents.zsh` (or `~/.codex/agents.zsh` after running `./install.sh`) to get the lightweight `agent_*` zsh helpers.
+2. Run the new dual-shell script `scripts/agent.sh`, which works the same under bash or zsh and exposes structured subcommands.
+
+### scripts/agent.sh (recommended for automation)
+```bash
+scripts/agent.sh spawn "Describe the task for Codex"
+```
+- Creates a dedicated branch & worktree under `.worktrees/<timestamp>-<rand>`
+- Prefers `direnv` for secrets; falls back to a sanitized whitelist from `scripts/agent.env.example`
+- Launches Codex in a detached tmux session and, on macOS, opens a Terminal window attached to it (configurable via `AGENT_MAC_ATTACH`)
+- Prints the task id, worktree path, and `tmux attach` command for manual supervision
+
+Other handy subcommands:
+- `scripts/agent.sh list` — enumerate active `codex-*` tmux sessions
+- `scripts/agent.sh attach <task-id>` — attach to the session
+- `scripts/agent.sh reload-env <task-id>` — run `direnv reload` or re-export whitelisted vars
+- `scripts/agent.sh status <task-id>` — show branch/worktree/session health
+- `scripts/agent.sh cleanup <task-id> [--force]` — tear down the session, worktree, and branch
+
+Configuration lives next to the script:
+- `scripts/agent.conf` — optional overrides (e.g., `AGENT_ENV_MODE=whitelist`, `AGENT_MAC_ATTACH=0`)
+- `scripts/agent.env.example` — document + curate the whitelist that the fallback exporter honors; set `AGENT_ENV_FILE` if you keep a different manifest, or export variables in your shell before spawning
+
+### agents.zsh helpers (interactive shell sugar)
 - `agent_spawn "Describe the task"`
-  - Creates a dedicated branch & worktree under `.worktrees/agent/...`
-  - Registers the task in `AGENTS.md`
-  - Opens a new Terminal window running `codex exec` in a minute-by-minute loop until it sees the commit `task <branch> finished`
-  - Prints the exact branch name (useful with `agent_await`)
+  - Wraps `agent.sh spawn` and keeps the legacy contract with `AGENTS.md`
 - `agent_await agent/refactor-foo-...`
   - Polls the worktree, reports status lines from `AGENTS.md`, merges back into the parent when the completion commit appears, and reminds you to clean up
 - `agent_watch_all`
