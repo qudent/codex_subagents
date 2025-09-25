@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { z } from "zod";
 
 const execFileP = promisify(execFile);
 
@@ -16,25 +17,34 @@ async function runZshFunction(functionName, args) {
   const cmd = "zsh";
   const invocation = [functionName, ...quotedArgs].join(" ");
   const shellCommand = `source ~/.codex/agents.zsh; ${invocation}`;
-  const { stdout } = await execFileP(cmd, ["-lc", shellCommand], {
-    cwd: process.cwd(),
-    env: process.env,
-  });
-  return stdout.trim();
+  try {
+    const { stdout } = await execFileP(cmd, ["-lc", shellCommand], {
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    return stdout.trim();
+  } catch (error) {
+    const stderr = error?.stderr?.trim();
+    const message = stderr ? `${error.message}: ${stderr}` : error.message;
+    throw new Error(`Failed to run ${functionName}: ${message}`);
+  }
 }
 
-server.tool(
+server.registerTool(
+  "spawn_subagent",
   {
-    name: "spawn_subagent",
     description: "Create a new subtask branch/worktree and start Codex there.",
     inputSchema: {
-      type: "object",
-      properties: { description: { type: "string" } },
-      required: ["description"],
+      description: z
+        .string()
+        .trim()
+        .min(1, "Provide a short task summary.")
+        .describe("Task summary recorded in AGENTS.md"),
     },
   },
   async ({ description }) => {
-    const branch = await runZshFunction("agent_spawn", [description]);
+    const safeDescription = description?.trim() || "(no description)";
+    const branch = await runZshFunction("agent_spawn", [safeDescription]);
     return {
       content: [
         {
@@ -46,23 +56,26 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
+  "cleanup_subagent",
   {
-    name: "cleanup_subagent",
     description: "Remove a finished subagent worktree and branch.",
     inputSchema: {
-      type: "object",
-      properties: { branch: { type: "string" } },
-      required: ["branch"],
+      branch: z
+        .string()
+        .trim()
+        .min(1, "Branch name is required.")
+        .describe("Subagent branch to clean up"),
     },
   },
   async ({ branch }) => {
-    const output = await runZshFunction("agent_cleanup", [branch]);
+    const safeBranch = branch.trim();
+    const output = await runZshFunction("agent_cleanup", [safeBranch]);
     return {
       content: [
         {
           type: "text",
-          text: output || `cleanup requested for ${branch}`,
+          text: output || `cleanup requested for ${safeBranch}`,
         },
       ],
     };

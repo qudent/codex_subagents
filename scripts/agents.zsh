@@ -84,7 +84,7 @@ echo "Subagent running for: '$branch' (worktree: \$(pwd))"
 while true; do
   codex exec "Continue working on task '$branch'. Follow AGENTS.md contract; update Status; stop only when done or blocked."
   git pull --ff-only >/dev/null 2>&1 || true
-  if git log --grep="^task '$branch' finished$" -1 --pretty=format:%H >/dev/null 2>&1; then
+  if git log --grep="^task $branch finished$" -1 --pretty=format:%H >/dev/null 2>&1; then
     echo "Completion commit detected. Exiting Codex loop."
     break
   fi

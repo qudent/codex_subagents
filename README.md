@@ -14,6 +14,7 @@ A minimal macOS-friendly starter kit that turns the plan in `codex-plan.md` into
 # follow the next steps printed at the end
 ```
 The installer copies the helper scripts into `~/.codex`, backs up any existing `agents.zsh`, ensures the MCP server is executable, and appends the MCP config block if it is missing.
+> Heads-up: the Codex CLI does not expand `~` inside MCP server paths. Re-running `./install.sh` after pulling updates refreshes `~/.codex/config.toml` with the correct absolute path automatically.
 
 Source the helpers for your current shell and future sessions:
 ```bash

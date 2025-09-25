@@ -9,6 +9,7 @@ TARGET_MCP="${MCP_DIR}/subagents.mjs"
 TARGET_PACKAGE="${MCP_DIR}/package.json"
 CONFIG_FILE="${CODEX_DIR}/config.toml"
 SNIPPET_FILE="${SCRIPT_DIR}/config/config.toml"
+SNIPPET_CONTENT="$(sed "s|{{TARGET_MCP}}|${TARGET_MCP}|g" "${SNIPPET_FILE}")"
 
 mkdir -p "${CODEX_DIR}" "${MCP_DIR}" "${CODEX_DIR}/backups"
 
@@ -35,11 +36,11 @@ if [[ -f "${CONFIG_FILE}" ]]; then
     echo "Config already contains subagents entry"
   else
     printf '\n' >> "${CONFIG_FILE}"
-    cat "${SNIPPET_FILE}" >> "${CONFIG_FILE}"
+    printf '%s\n' "${SNIPPET_CONTENT}" >> "${CONFIG_FILE}"
     echo "Appended subagents MCP block to ${CONFIG_FILE}"
   fi
 else
-  cp "${SNIPPET_FILE}" "${CONFIG_FILE}"
+  printf '%s\n' "${SNIPPET_CONTENT}" > "${CONFIG_FILE}"
   echo "Created ${CONFIG_FILE} with MCP block"
 fi
 

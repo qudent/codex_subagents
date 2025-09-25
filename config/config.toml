@@ -1,4 +1,5 @@
 # Append or merge this snippet into ~/.codex/config.toml so Codex CLI loads the subagents MCP server.
+# '{{TARGET_MCP}}' will be replaced by install.sh with the absolute path to the MCP script.
 [mcp_servers.subagents]
 command = "node"
-args = ["~/.codex/mcp/subagents.mjs"]
+args = ["{{TARGET_MCP}}"]
