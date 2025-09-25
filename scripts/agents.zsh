@@ -11,26 +11,36 @@ for __codex_opt in errexit nounset pipefail; do
   fi
 done
 
-set -euo pipefail
+# strict mode intentionally disabled globally; functions opt in as needed
 
 _applescript_escape(){ sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 agent_spawn(){
-  setopt localoptions errexit nounset pipefail
+  setopt localoptions nounset pipefail err_return
+  setopt errexit
   git rev-parse --is-inside-work-tree >/dev/null || { echo "Not in a git repo"; return 1; }
   local desc="${*:-(no description)}"
   local repo_root prev_branch ts rnd slug branch worktree now_iso env_snapshot
   repo_root="$(git rev-parse --show-toplevel)"
   prev_branch="$(git rev-parse --abbrev-ref HEAD)"
   ts="$(date +%Y%m%d-%H%M%S)"
-  rnd="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c6)"
+  rnd="$(printf '%06x' $((((RANDOM << 16) ^ (RANDOM << 1) ^ RANDOM) & 0xffffff)))"
   slug="$(printf '%s' "$desc" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9- ' | tr ' ' '-' | sed 's/--*/-/g' | cut -c1-32)"
   [[ -z "$slug" ]] && slug="task"
   branch="agent/${slug}-${ts}-${rnd}"
   worktree="${repo_root}/.worktrees/${branch}"
 
   mkdir -p "${repo_root}/.worktrees"
-  git -C "$repo_root" worktree add -b "$branch" "$worktree" HEAD
+
+  if ! git -C "$repo_root" rev-parse --verify HEAD >/dev/null 2>&1; then
+    print -u2 "Repo at $repo_root needs an initial commit before spawning agents"
+    return 1
+  fi
+
+  if ! git -C "$repo_root" worktree add -b "$branch" "$worktree" HEAD; then
+    print -u2 "Failed to add worktree $worktree for branch $branch"
+    return 1
+  fi
 
   # Reuse dependency caches by symlinking common directories into the worktree.
   for cache in node_modules .venv venv vendor; do
@@ -82,7 +92,7 @@ fi
 export CODEX_QUIET_MODE=1
 echo "Subagent running for: '$branch' (worktree: \$(pwd))"
 while true; do
-  codex exec "Continue working on task '$branch'. Follow AGENTS.md contract; update Status; stop only when done or blocked."
+  codex exec -s workspace-write -a on-request --search "Continue working on task '$branch'. Follow AGENTS.md contract; update Status; stop only when done or blocked."
   git pull --ff-only >/dev/null 2>&1 || true
   if git log --grep="^task $branch finished$" -1 --pretty=format:%H >/dev/null 2>&1; then
     echo "Completion commit detected. Exiting Codex loop."
@@ -95,15 +105,21 @@ EOF_RUN
 
   local run_esc
   run_esc="$(printf '%s' "$run" | _applescript_escape)"
-  /usr/bin/osascript >/dev/null <<APPLESCRIPT
+  if ! /usr/bin/osascript >/dev/null <<APPLESCRIPT
 tell application "Terminal" to do script "$run_esc"
 APPLESCRIPT
+  then
+    print -u2 "osascript failed to open Terminal"
+    echo "$branch"
+    return 1
+  fi
 
   echo "$branch"
 }
 
 agent_status(){
-  setopt localoptions errexit nounset pipefail
+  setopt localoptions nounset pipefail err_return
+  setopt errexit
   local branch="${1:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_status <branch>"; return 1; }
   local repo_root agents
@@ -118,7 +134,8 @@ agent_status(){
 }
 
 agent_await(){
-  setopt localoptions errexit nounset pipefail
+  setopt localoptions nounset pipefail err_return
+  setopt errexit
   local branch="${1:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_await <branch>"; return 1; }
   local repo_root wt agents
@@ -158,7 +175,8 @@ agent_await(){
 }
 
 agent_watch_all(){
-  setopt localoptions errexit nounset pipefail
+  setopt localoptions nounset pipefail err_return
+  setopt errexit
   local repo_root
   repo_root="$(git rev-parse --show-toplevel)"
   while true; do
@@ -174,7 +192,8 @@ agent_watch_all(){
 }
 
 agent_cleanup(){
-  setopt localoptions errexit nounset pipefail
+  setopt localoptions nounset pipefail err_return
+  setopt errexit
   local branch="${1:-}"
   local flag="${2:-}"
   [[ -n "$branch" ]] || { echo "Usage: agent_cleanup <branch> [--force]"; return 1; }
@@ -183,7 +202,7 @@ agent_cleanup(){
   wt="$repo_root/.worktrees/$branch"
   local worktree_args=()
   local branch_args=(-d)
-  local status=0
+  local cleanup_status=0
   if [[ "$flag" == "--force" ]]; then
     worktree_args+=(--force)
     branch_args=(-D)
@@ -197,7 +216,7 @@ agent_cleanup(){
       echo "Removed worktree $wt"
     else
       echo "Worktree removal failed. Try agent_cleanup $branch --force" >&2
-      status=1
+      cleanup_status=1
     fi
   else
     echo "No worktree at $wt"
@@ -208,13 +227,13 @@ agent_cleanup(){
       echo "Deleted branch $branch"
     else
       echo "Branch deletion failed. You may need agent_cleanup $branch --force" >&2
-      status=1
+      cleanup_status=1
     fi
   else
     echo "No branch named $branch"
   fi
 
-  return $status
+  return $cleanup_status
 }
 
 for __codex_opt in errexit nounset pipefail; do
