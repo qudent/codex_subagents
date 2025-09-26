@@ -26,10 +26,19 @@ spinup_worker(){
   local short="${1:-worker}"; short="$(_wt_slug "$short")"
   local base="${2:-main}"
 
-  local root tag uid base_dir wt_dir wt_path session branch src_env
+  local root tag uid base_dir wt_dir wt_path session branch src_env os_name opener
   root="$(_wt_repo_root)" || { echo "❌ Not in a Git repo." >&2; return 1; }
   command -v tmux >/dev/null 2>&1 || { echo "❌ tmux not found." >&2; return 1; }
-  command -v osascript >/dev/null 2>&1 || { echo "❌ osascript (macOS) not found." >&2; return 1; }
+
+  os_name="$(uname -s 2>/dev/null || echo unknown)"
+  if command -v osascript >/dev/null 2>&1 && [ "$os_name" = "Darwin" ]; then
+    opener="osascript"
+  elif [ "$os_name" = "Linux" ] && command -v xterm >/dev/null 2>&1; then
+    opener="xterm"
+  else
+    echo "❌ no supported terminal launcher found (need osascript on macOS or xterm on Linux)." >&2
+    return 1
+  fi
 
   tag="$(_wt_repo_tag)" || { echo "❌ Failed to build repo tag" >&2; return 1; }
   uid="$(_wt_uid)"
@@ -71,12 +80,19 @@ echo "✅ Ready in $(pwd)"
 EOS
   tmux send-keys -t "$session:0.0" "$setup_cmd" C-m
 
-  osascript >/dev/null <<EOF
+  if [ "$opener" = "osascript" ]; then
+    osascript >/dev/null <<EOF
 tell application "Terminal"
   activate
   do script "tmux attach -t ${session} || tmux new -s ${session}"
 end tell
 EOF
+  else
+    if ! "${opener}" -T "${session}" -e "${usershell}" -lc "tmux attach -t ${session} || tmux new -s ${session}" &; then
+      echo "❌ failed to launch xterm for session ${session}" >&2
+      return 1
+    fi
+  fi
 
   echo "✅ worker up
    repo:     $tag
