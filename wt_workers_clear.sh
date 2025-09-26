@@ -85,6 +85,45 @@ EOF
    branch:   $branch"
 }
 
+spinup_worktrees(){
+  local count="$1"
+
+  if [ -z "$count" ] || [ "$count" = "--help" ]; then
+    echo "usage: spinup_worktrees <count>" >&2
+    return 1
+  fi
+
+  case "$count" in
+    *[!0-9]*)
+      echo "❌ count must be a positive integer" >&2
+      return 1
+      ;;
+  esac
+
+  count=$((10#$count))
+
+  if [ "$count" -le 0 ]; then
+    echo "❌ count must be greater than zero" >&2
+    return 1
+  fi
+
+  shift
+  if [ $# -gt 0 ]; then
+    echo "❌ unexpected arguments; usage: spinup_worktrees <count>" >&2
+    return 1
+  fi
+
+  local i=1
+  while [ $i -le $count ]; do
+    echo "➡️  spinning up worker ${i}/${count}"
+    if ! spinup_worker; then
+      echo "❌ failed while creating worker ${i} of ${count}" >&2
+      return 1
+    fi
+    i=$((i + 1))
+  done
+}
+
 # === clean_worktrees (scoped, anchored, deletes branches, optional prune) ===
 clean_worktrees(){
   local FORCE=0 DRY=0 PRUNE=0
