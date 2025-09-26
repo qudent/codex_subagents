@@ -165,3 +165,183 @@ clean_worktrees(){
 
   echo "✅ cleanup complete for repo: $tag"
 }
+
+# --- small helpers ----------------------------------------------------------
+
+_wt_branch_for_worktree() {
+  # prints the short branch name for a given worktree path
+  local wt="$1"
+  git worktree list --porcelain | awk -v p="$wt" '
+    $1=="worktree" && $2==p { inwt=1; next }
+    inwt && $1=="branch" { sub("refs/heads/","",$2); print $2; exit }'
+}
+
+_wt_path_for_branch() {
+  # prints the worktree path that has <branch> checked out (empty if none)
+  local br="$1"
+  local wt=""
+  local cur=""
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *) cur="${line#worktree }" ;;
+      branch\ *)   b="${line#branch refs/heads/}"
+                   if [ "$b" = "$br" ]; then wt="$cur"; fi ;;
+    esac
+  done < <(git worktree list --porcelain)
+  printf "%s" "$wt"
+}
+
+_wt_guess_session() {
+  # if inside tmux, print current session name; else empty
+  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+    tmux display-message -p '#S'
+  fi
+}
+
+_wt_session_to_path() {
+  # map a session name to its worktree path (repo-scoped base dir + session)
+  local tag base_dir s="$1"
+  tag="$(_wt_repo_tag)" || return 1
+  base_dir="${WT_BASE:-$HOME/.worktrees}/${tag}"
+  printf "%s/%s" "$base_dir" "$s"
+}
+
+_wt_infer_wtpath() {
+  # priority: explicit arg (session or path) -> current tmux session -> cwd worktree
+  local arg="$1"
+  local wt=""
+  if [ -n "$arg" ]; then
+    if [ -d "$arg" ]; then
+      wt="$arg"
+    else
+      # treat as session name
+      wt="$(_wt_session_to_path "$arg")"
+    fi
+  fi
+  if [ -z "$wt" ] && [ -n "$(_wt_guess_session)" ]; then
+    wt="$(_wt_session_to_path "$(_wt_guess_session)")"
+  fi
+  if [ -z "$wt" ]; then
+    # last resort: find which worktree contains this cwd
+    local here; here="$(pwd -P)"
+    wt="$(git worktree list --porcelain | awk '
+      $1=="worktree"{print $2}' | while read -r p; do
+          case "$here" in
+            "$p"*) echo "$p"; break ;;
+          esac
+        done)"
+  fi
+  printf "%s" "$wt"
+}
+
+# --- merge one worker into main (without finishing) -------------------------
+
+merge_worker() {
+  # usage: merge_worker [<session-or-worktree-path>] [--target main] [--no-ff|--ff-only]
+  local target="main" ff="--ff-only" arg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) shift; target="${1:-main}" ;;
+      --no-ff)  ff="--no-ff" ;;
+      --ff-only) ff="--ff-only" ;;
+      *) arg="$1" ;;
+    esac; shift
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "❌ not in a git repo"; return 1; }
+
+  local wt; wt="$(_wt_infer_wtpath "$arg")"
+  [ -n "$wt" ] && [ -d "$wt" ] || { echo "❌ cannot resolve worker worktree"; return 1; }
+
+  local feature; feature="$(_wt_branch_for_worktree "$wt")"
+  [ -n "$feature" ] || { echo "❌ could not determine feature branch"; return 1; }
+
+  # safety: require clean index in the worker
+  if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+    echo "❌ worktree has uncommitted changes: $wt"; echo "   commit/stash or run finish_worker --force"; return 1
+  fi
+
+  echo "👉 rebasing '$feature' onto latest $target"
+  git fetch --all --quiet || true
+  git -C "$wt" pull --ff-only || true  # update remotes in this worktree env
+  if git rev-parse --verify -q "origin/$target" >/dev/null; then
+    git -C "$wt" rebase "origin/$target" || { echo "❌ rebase failed"; return 1; }
+  else
+    git -C "$wt" rebase "$target" || { echo "❌ rebase failed"; return 1; }
+  fi
+
+  # find where target is checked out
+  local main_wt; main_wt="$(_wt_path_for_branch "$target")"
+  if [ -n "$main_wt" ]; then
+    echo "👉 merging '$feature' into '$target' in $main_wt ($ff)"
+    git -C "$main_wt" fetch --quiet origin || true
+    git -C "$main_wt" merge $ff "$feature" || { echo "❌ merge failed"; return 1; }
+    git -C "$main_wt" push -u origin "$target" || true
+  else
+    echo "👉 '$target' not checked out; merging here"
+    git -C "$wt" checkout "$target" || { echo "❌ cannot checkout $target in worker"; return 1; }
+    git -C "$wt" merge $ff "$feature" || { echo "❌ merge failed"; return 1; }
+    git -C "$wt" push -u origin "$target" || true
+    # restore feature checkout for continued work
+    git -C "$wt" checkout "$feature" || true
+  fi
+
+  echo "✅ merged '$feature' -> '$target'"
+}
+
+# --- finish a worker: merge + remove worktree + delete branch + kill session -
+
+finish_worker() {
+  # usage: finish_worker [<session-or-worktree-path>] [--target main] [--no-ff|--ff-only] [--force]
+  local target="main" ff="--ff-only" force=0 arg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target)   shift; target="${1:-main}" ;;
+      --no-ff)    ff="--no-ff" ;;
+      --ff-only)  ff="--ff-only" ;;
+      --force)    force=1 ;;
+      *) arg="$1" ;;
+    esac; shift
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "❌ not in a git repo"; return 1; }
+
+  local wt; wt="$(_wt_infer_wtpath "$arg")"
+  [ -n "$wt" ] && [ -d "$wt" ] || { echo "❌ cannot resolve worker worktree"; return 1; }
+
+  local feature; feature="$(_wt_branch_for_worktree "$wt")"
+  [ -n "$feature" ] || { echo "❌ could not determine feature branch"; return 1; }
+
+  if [ $force -eq 0 ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+    echo "❌ worktree has uncommitted changes: $wt"
+    echo "   commit/stash or re-run with --force to discard them"
+    return 1
+  fi
+
+  # merge first (reuses the logic above)
+  merge_worker "$wt" --target "$target" $ff || return 1
+
+  # after successful merge, remove the worktree and delete the branch
+  echo "👉 removing worktree: $wt"
+  if [ $force -eq 1 ]; then
+    git worktree remove --force "$wt" || { echo "❌ failed to remove worktree"; return 1; }
+  else
+    git worktree remove "$wt" || { echo "❌ failed to remove worktree (use --force?)"; return 1; }
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/${feature}"; then
+    echo "👉 deleting branch: $feature"
+    git branch -D "$feature" || true
+  fi
+
+  # kill the associated tmux session if it exists (same name as worktree folder)
+  if command -v tmux >/dev/null 2>&1; then
+    local sess="$(basename "$wt")"
+    if tmux list-sessions -F '#S' 2>/dev/null | grep -qx "$sess"; then
+      echo "👉 killing tmux session: $sess"
+      tmux kill-session -t "$sess" || true
+    fi
+  fi
+
+  echo "✅ finished worker '$feature' into '$target'"
+}
