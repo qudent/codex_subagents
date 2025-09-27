@@ -309,10 +309,21 @@ finish_worker() {
   local feature; feature="$(_wt_branch_for_worktree "$wt")"
   [ -n "$feature" ] || { echo "❌ could not determine feature branch"; return 1; }
 
-  if [ $force -eq 0 ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-    echo "❌ worktree has uncommitted changes: $wt"
-    echo "   commit/stash or re-run with --force to discard them"
-    return 1
+  dirty_state="$(git -C "$wt" status --porcelain 2>/dev/null)"
+  if [ -n "$dirty_state" ]; then
+    if [ $force -eq 0 ]; then
+      echo "❌ worktree has uncommitted changes: $wt"
+      echo "   commit/stash or re-run with --force to discard them"
+      return 1
+    fi
+
+    echo "⚠️  discarding uncommitted changes in $wt"
+    git -C "$wt" reset --hard HEAD >/dev/null 2>&1 || {
+      echo "❌ failed to reset worktree"; return 1;
+    }
+    git -C "$wt" clean -fd >/dev/null 2>&1 || {
+      echo "❌ failed to clean worktree"; return 1;
+    }
   fi
 
   # merge first (reuses the logic above)
