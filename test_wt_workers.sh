@@ -18,9 +18,9 @@ git commit -m "init"
 echo "✅ Created test repo at $TESTDIR"
 
 # 2. Source the script
-. /Users/name/subagents_codex/wt_workers_clear.sh
+. worktree-subagent-automation.sh
 
-echo "✅ Sourced wt_workers_clear.sh"
+echo "✅ Sourced worktree-subagent-automation.sh"
 
 # 3. Create a dummy file and commit to main
 cat <<EOF > hello.txt
