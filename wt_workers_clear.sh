@@ -26,6 +26,7 @@ spinup_worker(){
   local short="${1:-worker}"; short="$(_wt_slug "$short")"
   local base="${2:-main}"
 
+  # Fix Bash compatibility: move local declarations outside subshells and blocks
   local root tag uid base_dir wt_dir wt_path session branch src_env os_name opener
   root="$(_wt_repo_root)" || { echo "❌ Not in a Git repo." >&2; return 1; }
   command -v tmux >/dev/null 2>&1 || { echo "❌ tmux not found." >&2; return 1; }
@@ -64,20 +65,12 @@ spinup_worker(){
   [ -f "$src_env" ] && [ ! -f "${wt_path}/.env" ] && cp "$src_env" "${wt_path}/.env" || true
   ( cd "$wt_path" && _wt_js_install ) || true
 
-  local usershell="${SHELL:-/bin/bash}"
+  local usershell
+  usershell="${SHELL:-/bin/bash}"
   tmux new-session -d -s "$session" -c "$wt_path" "$usershell" -l || { echo "❌ tmux new-session failed" >&2; return 1; }
 
-  read -r -d '' setup_cmd <<'EOS' || true
-[ -f .venv/bin/activate ] && . .venv/bin/activate || true
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
-if [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then
-  if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi
-  if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi
-  if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi
-fi
-clear
-echo "✅ Ready in $(pwd)"
-EOS
+  # Use Bash-compatible heredoc for setup_cmd
+  setup_cmd="[ -f .venv/bin/activate ] && . .venv/bin/activate || true\nif [ -f .env ]; then set -a; . ./.env; set +a; fi\nif [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then\n  if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi\n  if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi\n  if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi\nfi\nclear\necho \"✅ Ready in $(pwd)\""
   tmux send-keys -t "$session:0.0" "$setup_cmd" C-m
 
   if [ "$opener" = "osascript" ]; then
