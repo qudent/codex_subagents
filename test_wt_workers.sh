@@ -1,14 +1,15 @@
-#!/bin/bash
+#!/bin/sh
 # test_wt_workers.sh
 # Instructive test setup for wt_workers_clear.sh
 # Demonstrates repo setup, worker spawning, tmux interaction, merging, cleanup, and edge cases.
 
-set -e
+# Record root dir to clean up properly later
+ROOT_DIR=$(pwd -P)
 
 # 1. Create a temporary test directory and initialize a git repo
-TESTDIR="$HOME/tmp_wt_test_$$"
+TESTDIR="test"
 mkdir -p "$TESTDIR"
-cd "$TESTDIR"
+cd "$TESTDIR" || exit 1
 echo "# Test Repo" > README.md
 git init
 git add README.md
@@ -17,7 +18,7 @@ git commit -m "init"
 echo "✅ Created test repo at $TESTDIR"
 
 # 2. Source the script
-source /Users/name/subagents_codex/wt_workers_clear.sh
+. /Users/name/subagents_codex/wt_workers_clear.sh
 
 echo "✅ Sourced wt_workers_clear.sh"
 
@@ -31,19 +32,22 @@ git commit -m "Add hello.txt"
 echo "✅ Added hello.txt to main"
 
 # 4. Spawn a worker (worktree + tmux session)
-spinup_worker testworker main
+short="testworker"
+spinup_worker "$short" main
 
-echo "✅ Spawned worker 'testworker'"
+echo "✅ Spawned worker '$short'"
 
 # 5. Send instructions to tmux to create a file in the worker
 # Find the session name and worktree path
 tag="$(_wt_repo_tag)"
-uid=$(ls "$HOME/.worktrees/$tag" | grep 'testworker' | head -n1 | sed 's/^.*-wt-.*-//')
-session="${tag}-wt-testworker-${uid}"
-wt_path="$HOME/.worktrees/$tag/${session}"
+base_dir="$HOME/.worktrees/$tag"
+session=$(ls -1t "$base_dir" | grep "^${tag}-${short}-" | head -n1)
+wt_path="$base_dir/$session"
 
-echo "echo 'Created from tmux' > tmuxfile.txt" | tmux send-keys -t "$session:0.0" C-m
-sleep 2  # Give tmux time to create the file
+# Create a file in the tmux session
+TMUX_CMD='echo "Created from tmux" > tmuxfile.txt'
+tmux send-keys -t "$session:0.0" "$TMUX_CMD" C-m
+sleep 1  # Give tmux time to create the file
 
 # 6. Commit the new file in the worker
 (cd "$wt_path" && git add tmuxfile.txt && git commit -m "Add tmuxfile.txt from tmux")
@@ -60,7 +64,8 @@ echo "✅ Finished worker and cleaned up"
 
 # 9. Edge case: dirty worktree, force cleanup, dry-run, prune branches
 spinup_worker dirtyworker main
-wt_path_dirty="$HOME/.worktrees/$tag/${tag}-wt-dirtyworker-$(ls "$HOME/.worktrees/$tag" | grep 'dirtyworker' | head -n1 | sed 's/^.*-wt-.*-//')"
+session_dirty=$(ls -1t "$base_dir" | grep "^${tag}-dirtyworker-" | head -n1)
+wt_path_dirty="$base_dir/$session_dirty"
 echo "Uncommitted change" > "$wt_path_dirty/dirty.txt"
 
 # Try to finish worker (should fail)
@@ -82,13 +87,13 @@ echo "✅ Pruned stray branches"
 
 # Cleanup test repo
 tmux kill-server || true
-cd ~
+cd "$ROOT_DIR"
 rm -rf "$TESTDIR"
 echo "✅ Test complete and cleaned up"
 
 # --- End of test script ---
 
 # To run:
-#   bash test_wt_workers.sh
+#   sh test_wt_workers.sh
 # Make sure you have tmux and git installed, and the script path is correct.
 # This script demonstrates the main features and edge cases of wt_workers_clear.sh.

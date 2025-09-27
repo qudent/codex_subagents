@@ -1,9 +1,8 @@
 # --- helpers reused ---
-_wt_repo_root(){ git rev-parse --show-toplevel 2>/dev/null; }
-_wt_slug(){ printf "%s" "$1" | tr '[:space:]/:' '-' | tr -cd '[:alnum:]-_.'; }
-_wt_uid(){ printf "%s-%s" "$(date +%y%m%d-%H%M)" "$(hexdump -n2 -e '2/1 "%02x"' /dev/urandom 2>/dev/null || echo 0000)"; }
-_wt_repo_tag(){
-  local root name hash
+_wt_repo_root() { git rev-parse --show-toplevel 2>/dev/null; }
+_wt_slug() { printf "%s" "$1" | tr '[:space:]/:' '-' | tr -cd '[:alnum:]-_.'; }
+_wt_uid() { printf "%s-%s" "$(date +%y%m%d-%H%M)" "$(hexdump -n2 -e '2/1 "%02x"' /dev/urandom 2>/dev/null || echo 0000)"; }
+_wt_repo_tag() {
   root="$(_wt_repo_root)" || return 1
   name="$(basename "$root" | tr -cd '[:alnum:]-_.')"
   if command -v shasum >/dev/null 2>&1; then
@@ -15,19 +14,17 @@ _wt_repo_tag(){
   fi
   printf "%s-%s" "$name" "$hash"
 }
-_wt_js_install(){
+_wt_js_install() {
   if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; return; fi
   if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; return; fi
   if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; return; fi
 }
 
 # === spinup_worker ===
-spinup_worker(){
-  local short="${1:-worker}"; short="$(_wt_slug "$short")"
-  local base="${2:-main}"
+spinup_worker() {
+  short="$1"; if [ -z "$short" ]; then short="worker"; fi; short="$(_wt_slug "$short")"
+  base="$2"; if [ -z "$base" ]; then base="main"; fi
 
-  # Fix Bash compatibility: move local declarations outside subshells and blocks
-  local root tag uid base_dir wt_dir wt_path session branch src_env os_name opener
   root="$(_wt_repo_root)" || { echo "❌ Not in a Git repo." >&2; return 1; }
   command -v tmux >/dev/null 2>&1 || { echo "❌ tmux not found." >&2; return 1; }
 
@@ -43,98 +40,84 @@ spinup_worker(){
 
   tag="$(_wt_repo_tag)" || { echo "❌ Failed to build repo tag" >&2; return 1; }
   uid="$(_wt_uid)"
-  base_dir="${WT_BASE:-$HOME/.worktrees}/${tag}"
+  base_dir="${WT_BASE:-$HOME/.worktrees}/$tag"
   mkdir -p "$base_dir"
 
-  wt_dir="${tag}-wt-${short}-${uid}"
-  wt_path="${base_dir}/${wt_dir}"
-  session="$wt_dir"                 # tmux session == worktree dir (unique, scoped)
-  branch="worker/${short}-${uid}"
-  src_env="${root}/.env"
+  # concise worktree/session name
+  wt_dir="$tag-$short-$uid"
+  wt_path="$base_dir/$wt_dir"
+  session="$wt_dir"
+  branch="worker/$short-$uid"
+  src_env="$root/.env"
 
-  echo "👉 creating branch ${branch} from ${base}"
-  if git rev-parse --verify -q "refs/remotes/origin/${base}" >/dev/null; then
-    git branch "$branch" "origin/${base}" || { echo "❌ Failed to create branch" >&2; return 1; }
+  echo "👉 creating branch $branch from $base"
+  if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
+    git branch "$branch" "origin/$base" || { echo "❌ Failed to create branch" >&2; return 1; }
   else
     git branch "$branch" "$base" || { echo "❌ Failed to create branch" >&2; return 1; }
   fi
 
-  echo "👉 adding worktree at ${wt_path}"
+  echo "👉 adding worktree at $wt_path"
   git worktree add "$wt_path" "$branch" || { echo "❌ git worktree add failed" >&2; return 1; }
 
-  [ -f "$src_env" ] && [ ! -f "${wt_path}/.env" ] && cp "$src_env" "${wt_path}/.env" || true
-  ( cd "$wt_path" && _wt_js_install ) || true
+  if [ -f "$src_env" ] && [ ! -f "$wt_path/.env" ]; then cp "$src_env" "$wt_path/.env"; fi
+  (cd "$wt_path" && _wt_js_install) || true
 
-  local usershell
-  usershell="${SHELL:-/bin/bash}"
+  usershell="$SHELL"; if [ -z "$usershell" ]; then usershell="/bin/sh"; fi
   tmux new-session -d -s "$session" -c "$wt_path" "$usershell" -l || { echo "❌ tmux new-session failed" >&2; return 1; }
 
-  # Use Bash-compatible heredoc for setup_cmd
-  setup_cmd="[ -f .venv/bin/activate ] && . .venv/bin/activate || true\nif [ -f .env ]; then set -a; . ./.env; set +a; fi\nif [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then\n  if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi\n  if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi\n  if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi\nfi\nclear\necho \"✅ Ready in $(pwd)\""
+  setup_cmd="[ -f .venv/bin/activate ] && . .venv/bin/activate || true; if [ -f .env ]; then set -a; . ./.env; set +a; fi; if [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi; if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi; if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi; fi; clear; echo '✅ Ready in $(pwd)'"
   tmux send-keys -t "$session:0.0" "$setup_cmd" C-m
 
   if [ "$opener" = "osascript" ]; then
     osascript >/dev/null <<EOF
-tell application "Terminal"
-  activate
-  do script "tmux attach -t ${session} || tmux new -s ${session}"
-end tell
+      tell application "Terminal"
+        activate
+        do script "tmux attach -t ${session} || tmux new -s ${session}"
+      end tell
 EOF
   else
-    if ! "${opener}" -T "${session}" -e "${usershell}" -lc "tmux attach -t ${session} || tmux new -s ${session}" &; then
-      echo "❌ failed to launch xterm for session ${session}" >&2
-      return 1
-    fi
+    "${opener}" -T "$session" -e "$usershell" -lc "tmux attach -t ${session} || tmux new -s ${session}" &
   fi
 
-  echo "✅ worker up
-   repo:     $tag
-   session:  $session
-   worktree: $wt_path
-   branch:   $branch"
+  echo "✅ worker up\n   repo:     $tag\n   session:  $session\n   worktree: $wt_path\n   branch:   $branch"
 }
 
-spinup_worktrees(){
-  local count="$1"
-
-  if [ -z "$count" ] || [ "$count" = "--help" ]; then
-    echo "usage: spinup_worktrees <count>" >&2
-    return 1
-  fi
-
-  case "$count" in
-    *[!0-9]*)
-      echo "❌ count must be a positive integer" >&2
-      return 1
-      ;;
-  esac
-
-  count=$((10#$count))
-
-  if [ "$count" -le 0 ]; then
-    echo "❌ count must be greater than zero" >&2
-    return 1
-  fi
-
-  shift
-  if [ $# -gt 0 ]; then
-    echo "❌ unexpected arguments; usage: spinup_worktrees <count>" >&2
-    return 1
-  fi
-
-  local i=1
-  while [ $i -le $count ]; do
-    echo "➡️  spinning up worker ${i}/${count}"
-    if ! spinup_worker; then
-      echo "❌ failed while creating worker ${i} of ${count}" >&2
-      return 1
-    fi
-    i=$((i + 1))
-  done
+_wt_session_to_path() {
+  # map a session name to its worktree path (repo-scoped base dir + session)
+  tag="$(_wt_repo_tag)" || return 1
+  base_dir="${WT_BASE:-$HOME/.worktrees}/$tag"
+  printf "%s/%s" "$base_dir" "$1"
 }
 
-# === clean_worktrees (scoped, anchored, deletes branches, optional prune) ===
-clean_worktrees(){
+_wt_infer_wtpath() {
+  # priority: explicit arg (session or path) -> current tmux session -> cwd worktree
+  arg="$1"
+  wt=""
+  if [ -n "$arg" ]; then
+    if [ -d "$arg" ]; then
+      wt="$arg"
+    else
+      # treat as session name
+      wt="$(_wt_session_to_path "$arg")"
+      [ -d "$wt" ] || wt=""
+    fi
+  fi
+  if [ -z "$wt" ] && [ -n "$(_wt_guess_session)" ]; then
+    wt="$(_wt_session_to_path "$(_wt_guess_session)")"
+    [ -d "$wt" ] || wt=""
+  fi
+  if [ -z "$wt" ]; then
+    here="$(pwd -P)"
+    wt="$(git worktree list --porcelain | awk -v here="$here" '
+      $1=="worktree" { p=$2; if (index(here,p)==1) { print p; exit } }
+    ')"
+  fi
+  printf "%s" "$wt"
+}
+
+# --- clean_worktrees (scoped, anchored, deletes branches, optional prune) ===
+clean_worktrees() {
   local FORCE=0 DRY=0 PRUNE=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -149,7 +132,7 @@ clean_worktrees(){
   local root tag base_dir
   root="$(_wt_repo_root)" || { echo "❌ Not in a Git repo." >&2; return 1; }
   tag="$(_wt_repo_tag)"   || { echo "❌ Failed to build repo tag" >&2; return 1; }
-  base_dir="${WT_BASE:-$HOME/.worktrees}/${tag}"
+  base_dir="${WT_BASE:-$HOME/.worktrees}/$tag"
 
   command -v tmux >/dev/null 2>&1 || { echo "❌ tmux not found"; return 1; }
 
@@ -158,7 +141,7 @@ clean_worktrees(){
 
   # 1) remove stale worktrees under this repo’s base_dir
   if [ -d "$base_dir" ]; then
-    find "$base_dir" -maxdepth 1 -type d -name "${tag}-wt-*" | while IFS= read -r wt; do
+    find "$base_dir" -maxdepth 1 -type d -name "${tag}-*" | while IFS= read -r wt; do
       local name; name="$(basename "$wt")"
       if printf "%s\n" "$sessions" | grep -qx "$name"; then
         continue  # session alive
@@ -191,11 +174,15 @@ clean_worktrees(){
   fi
 
   # 2) kill orphan tmux sessions for this repo tag
-  printf "%s\n" "$sessions" | grep -E "^${tag}-wt-" || true | while IFS= read -r s; do
+  printf "%s\n" "$sessions" | grep -E "^${tag}-" | while IFS= read -r s; do
     local wt="${base_dir}/${s}"
     if [ ! -d "$wt" ]; then
       echo "✂️  killing orphan tmux session: $s"
-      [ $DRY -eq 1 ] && echo "   (dry-run) tmux kill-session -t \"$s\"" || tmux kill-session -t "$s" || true
+      if [ $DRY -eq 1 ]; then
+        echo "   (dry-run) tmux kill-session -t \"$s\""
+      else
+        tmux kill-session -t "$s" || true
+      fi
     fi
   done
 
@@ -227,16 +214,14 @@ _wt_branch_for_worktree() {
 _wt_path_for_branch() {
   # prints the worktree path that has <branch> checked out (empty if none)
   local br="$1"
-  local wt=""
-  local cur=""
-  while IFS= read -r line; do
-    case "$line" in
-      worktree\ *) cur="${line#worktree }" ;;
-      branch\ *)   b="${line#branch refs/heads/}"
-                   if [ "$b" = "$br" ]; then wt="$cur"; fi ;;
-    esac
-  done < <(git worktree list --porcelain)
-  printf "%s" "$wt"
+  git worktree list --porcelain | awk -v br="$br" '
+    $1=="worktree" { cur=$2; next }
+    $1=="branch" {
+      b=$2
+      sub("refs/heads/","",b)
+      if (b==br) { print cur; exit }
+    }
+  '
 }
 
 _wt_guess_session() {
@@ -244,42 +229,6 @@ _wt_guess_session() {
   if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     tmux display-message -p '#S'
   fi
-}
-
-_wt_session_to_path() {
-  # map a session name to its worktree path (repo-scoped base dir + session)
-  local tag base_dir s="$1"
-  tag="$(_wt_repo_tag)" || return 1
-  base_dir="${WT_BASE:-$HOME/.worktrees}/${tag}"
-  printf "%s/%s" "$base_dir" "$s"
-}
-
-_wt_infer_wtpath() {
-  # priority: explicit arg (session or path) -> current tmux session -> cwd worktree
-  local arg="$1"
-  local wt=""
-  if [ -n "$arg" ]; then
-    if [ -d "$arg" ]; then
-      wt="$arg"
-    else
-      # treat as session name
-      wt="$(_wt_session_to_path "$arg")"
-    fi
-  fi
-  if [ -z "$wt" ] && [ -n "$(_wt_guess_session)" ]; then
-    wt="$(_wt_session_to_path "$(_wt_guess_session)")"
-  fi
-  if [ -z "$wt" ]; then
-    # last resort: find which worktree contains this cwd
-    local here; here="$(pwd -P)"
-    wt="$(git worktree list --porcelain | awk '
-      $1=="worktree"{print $2}' | while read -r p; do
-          case "$here" in
-            "$p"*) echo "$p"; break ;;
-          esac
-        done)"
-  fi
-  printf "%s" "$wt"
 }
 
 # --- merge one worker into main (without finishing) -------------------------
