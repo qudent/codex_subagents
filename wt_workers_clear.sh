@@ -21,7 +21,7 @@ _wt_js_install(){
   if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; return; fi
 }
 
-# === spinup_worker (unchanged behavior, now anchored to per-repo base dir) ===
+# === spinup_worker ===
 spinup_worker(){
   local short="${1:-worker}"; short="$(_wt_slug "$short")"
   local base="${2:-main}"
