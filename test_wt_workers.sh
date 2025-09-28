@@ -6,7 +6,29 @@
 # Record root dir to clean up properly later
 ROOT_DIR=$(pwd -P)
 
-# 1. Create a temporary test directory and initialize a git repo
+# Helper: resolve the worktree path for the newest worker branch with the given prefix
+find_worker_worktree() {
+  prefix="$1"
+  git worktree list --porcelain | awk -v prefix="$prefix" '
+    $1=="worktree" { wt=$2; next }
+    $1=="branch" {
+      ref=$2
+      sub("^refs/heads/", "", ref)
+      if (index(ref, prefix) == 1) {
+        print wt
+        exit
+      }
+    }
+  '
+}
+
+# 1. Source the script
+. worktree-subagent-automation.sh
+
+echo "✅ Sourced worktree-subagent-automation.sh"
+
+
+# 2. Create a temporary test directory and initialize a git repo
 TESTDIR="test"
 mkdir -p "$TESTDIR"
 cd "$TESTDIR" || exit 1
@@ -16,11 +38,6 @@ git add README.md
 git commit -m "init"
 
 echo "✅ Created test repo at $TESTDIR"
-
-# 2. Source the script
-. worktree-subagent-automation.sh
-
-echo "✅ Sourced worktree-subagent-automation.sh"
 
 # 3. Create a dummy file and commit to main
 cat <<EOF > hello.txt
@@ -38,11 +55,14 @@ spinup_worker "$short" main
 echo "✅ Spawned worker '$short'"
 
 # 5. Send instructions to tmux to create a file in the worker
-# Find the session name and worktree path
-tag="$(_wt_repo_tag)"
-base_dir="$HOME/.worktrees/$tag"
-session=$(ls -1t "$base_dir" | grep "^${tag}-${short}-" | head -n1)
-wt_path="$base_dir/$session"
+# Find the session name and worktree path via git worktree metadata
+worker_prefix="worker/${short}-"
+wt_path="$(find_worker_worktree "$worker_prefix")"
+if [ -z "$wt_path" ]; then
+  echo "❌ Failed to locate worktree for $short" >&2
+  exit 1
+fi
+session="$(basename "$wt_path")"
 
 # Create a file in the tmux session
 TMUX_CMD='echo "Created from tmux" > tmuxfile.txt'
@@ -64,8 +84,12 @@ echo "✅ Finished worker and cleaned up"
 
 # 9. Edge case: dirty worktree, force cleanup, dry-run, prune branches
 spinup_worker dirtyworker main
-session_dirty=$(ls -1t "$base_dir" | grep "^${tag}-dirtyworker-" | head -n1)
-wt_path_dirty="$base_dir/$session_dirty"
+dirty_prefix="worker/dirtyworker-"
+wt_path_dirty="$(find_worker_worktree "$dirty_prefix")"
+if [ -z "$wt_path_dirty" ]; then
+  echo "❌ Failed to locate worktree for dirtyworker" >&2
+  exit 1
+fi
 echo "Uncommitted change" > "$wt_path_dirty/dirty.txt"
 
 # Try to finish worker (should fail)

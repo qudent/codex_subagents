@@ -153,6 +153,16 @@ clean_worktrees() {
         $1=="worktree" && $2==p { inwt=1; next }
         inwt && $1=="branch" { sub("refs/heads/","",$2); print $2; exit }')"
 
+      if [ -z "$branch" ]; then
+        echo "🗑 removing stale worktree: $wt (not registered)"
+        if [ $DRY -eq 1 ]; then
+          echo "   (dry-run) rm -rf \"$wt\""
+        else
+          rm -rf "$wt" || { echo "   ⛔ failed to remove $wt"; continue; }
+        fi
+        continue
+      fi
+
       local dirty=0
       if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then dirty=1; fi
       if [ $dirty -eq 1 ] && [ $FORCE -ne 1 ]; then
