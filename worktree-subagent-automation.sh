@@ -309,8 +309,13 @@ merge_worker() {
   fi
 
   echo "👉 rebasing '$feature' onto latest $target"
-  git fetch --all --quiet || true
-  git -C "$wt" pull --ff-only || true  # update remotes in this worktree env
+  if [ -n "$(git remote 2>/dev/null)" ]; then
+    git fetch --all --quiet || true
+  fi
+
+  if git -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    git -C "$wt" pull --ff-only || true  # update remotes in this worktree env
+  fi
   if git rev-parse --verify -q "origin/$target" >/dev/null; then
     git -C "$wt" rebase "origin/$target" || { echo "❌ rebase failed"; return 1; }
   else
@@ -321,14 +326,20 @@ merge_worker() {
   local main_wt; main_wt="$(_wt_path_for_branch "$target")"
   if [ -n "$main_wt" ]; then
     echo "👉 merging '$feature' into '$target' in $main_wt ($ff)"
-    git -C "$main_wt" fetch --quiet origin || true
+    if git -C "$main_wt" remote | grep -qx origin; then
+      git -C "$main_wt" fetch --quiet origin || true
+    fi
     git -C "$main_wt" merge $ff "$feature" || { echo "❌ merge failed"; return 1; }
-    git -C "$main_wt" push -u origin "$target" || true
+    if git -C "$main_wt" remote | grep -qx origin; then
+      git -C "$main_wt" push -u origin "$target" || true
+    fi
   else
     echo "👉 '$target' not checked out; merging here"
     git -C "$wt" checkout "$target" || { echo "❌ cannot checkout $target in worker"; return 1; }
     git -C "$wt" merge $ff "$feature" || { echo "❌ merge failed"; return 1; }
-    git -C "$wt" push -u origin "$target" || true
+    if git -C "$wt" remote | grep -qx origin; then
+      git -C "$wt" push -u origin "$target" || true
+    fi
     # restore feature checkout for continued work
     git -C "$wt" checkout "$feature" || true
   fi
