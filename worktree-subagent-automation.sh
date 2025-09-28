@@ -14,6 +14,35 @@ _wt_repo_tag() {
   fi
   printf "%s-%s" "$name" "$hash"
 }
+
+_wt_record_script_path() {
+  candidate="$1"
+  [ -n "$candidate" ] || return 0
+  case "$candidate" in
+    /*) _WT_AUTOMATION_SCRIPT_PATH="$candidate" ;;
+    *)
+      base="$(dirname "$candidate" 2>/dev/null || printf '.')"
+      abs_base="$(cd "$base" 2>/dev/null && pwd -P)"
+      if [ -n "$abs_base" ]; then
+        _WT_AUTOMATION_SCRIPT_PATH="$abs_base/$(basename "$candidate")"
+      fi
+      ;;
+  esac
+}
+
+if [ -z "${_WT_AUTOMATION_SCRIPT_PATH:-}" ]; then
+  if [ -n "${BASH_SOURCE:-}" ]; then
+    _wt_record_script_path "${BASH_SOURCE}"
+  fi
+  case "${0:-}" in
+    *worktree-subagent-automation.sh)
+      [ -n "${_WT_AUTOMATION_SCRIPT_PATH:-}" ] || _wt_record_script_path "$0"
+      ;;
+  esac
+  if [ -z "${_WT_AUTOMATION_SCRIPT_PATH:-}" ] && [ -f "worktree-subagent-automation.sh" ]; then
+    _wt_record_script_path "$(pwd -P)/worktree-subagent-automation.sh"
+  fi
+fi
 _wt_js_install() {
   if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; return; fi
   if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; return; fi
@@ -66,7 +95,18 @@ spinup_worker() {
   usershell="$SHELL"; if [ -z "$usershell" ]; then usershell="/bin/sh"; fi
   tmux new-session -d -s "$session" -c "$wt_path" "$usershell" -l || { echo "❌ tmux new-session failed" >&2; return 1; }
 
-  setup_cmd="[ -f .venv/bin/activate ] && . .venv/bin/activate || true; if [ -f .env ]; then set -a; . ./.env; set +a; fi; if [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi; if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi; if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi; fi; clear; echo '✅ Ready in $(pwd)'"
+  automation_source="${_WT_AUTOMATION_SCRIPT_PATH:-}"
+  if [ -z "$automation_source" ] && [ -f "$root/worktree-subagent-automation.sh" ]; then
+    automation_source="$root/worktree-subagent-automation.sh"
+  fi
+  if [ -n "$automation_source" ]; then
+    automation_source_escaped=$(printf '%s' "$automation_source" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    source_cmd="if [ -f \"$automation_source_escaped\" ]; then . \"$automation_source_escaped\"; fi; "
+  else
+    source_cmd=""
+  fi
+
+  setup_cmd="${source_cmd}[ -f .venv/bin/activate ] && . .venv/bin/activate || true; if [ -f .env ]; then set -a; . ./.env; set +a; fi; if [ -f package-lock.json ] || [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then if command -v npm >/dev/null 2>&1 && [ -f package-lock.json ]; then npm ci || true; fi; if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || true; fi; if command -v yarn >/dev/null 2>&1 && [ -f yarn.lock ]; then yarn install --frozen-lockfile || true; fi; fi; clear; echo '✅ Ready in $(pwd)'"
   tmux send-keys -t "$session:0.0" "$setup_cmd" C-m
 
   if [ "$opener" = "osascript" ]; then
@@ -363,3 +403,16 @@ finish_worker() {
 
   echo "✅ finished worker '$feature' into '$target'"
 }
+
+if [ -z "${_WT_AUTOMATION_USAGE_PRINTED:-}" ]; then
+  cat <<'EOF'
+Available worktree helpers:
+  spinup_worker [name] [base]      create a tmux session + worktree from <base> (default main)
+  merge_worker [session|path]      merge the worker branch into target (default main)
+  finish_worker [session|path]     merge, remove the worktree, delete branch, kill session
+  clean_worktrees [options]        tidy orphan worktrees/sessions; use --help-ish flags above
+
+Tip: run these commands inside any worker without arguments—they target the current worktree.
+EOF
+  _WT_AUTOMATION_USAGE_PRINTED=1
+fi

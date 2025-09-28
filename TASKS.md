@@ -1,3 +1,6 @@
 - print out function names and concise basic usage instructions when sourcing worktree-subagent-automation.sh
-- in the terminals started, source these files as well
+- in the terminals started, source the file as well together with .venv/bin/activate of original path, and .env file vars
+- source the file
 - in the subagents, finish_worker, merge etc without any arguments should refer to the worktree themselves
+- stop copying .env files -- symlink instead
+- auto export 
