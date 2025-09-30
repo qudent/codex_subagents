@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script thoroughly tests the wtx flow in a sandboxed repo under testing/
-# It does not touch files/folders outside testing/
+# Comprehensive wtx test script for codex_subagents
+# All test data is under testing-data/, nothing outside is touched.
 
-TEST_ROOT="testing/wtx_testrepo"
-WORKTREES="testing/wtx_testrepo.worktrees"
-REPO_NAME="wtx_testrepo"
-WTX_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/wtx"
+TEST_ROOT="testing-data/test-repo"
+WORKTREES="testing-data"
+REPO_NAME="test-repo"
+WTX_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wtx"
 export WTX_OSA_OPEN=0  # Disable macOS Terminal opening for tests
 export WTX_SESSION_PREFIX="wtx_test"  # Avoid collisions with real sessions
 
-fail() { echo "FAIL: $*"; exit 1; }
-
-step() { echo "\n==> $*"; }
+fail()    { echo -e "\n❌ FAIL: $*"; exit 1; }
+step()    { echo -e "\n👉 $*"; }
+success() { echo -e "\n✅ $*"; }
 
 cleanup() {
   step "Cleaning up test repo and worktrees"
-  rm -rf "$TEST_ROOT" "$WORKTREES"
+  rm -rf "$TEST_ROOT"
+  # Remove all worktrees created by this test
+  find "$WORKTREES" -maxdepth 1 -type d -name 's*-main-*' -exec rm -rf {} +
+  # Remove any old testrepo.worktrees or similar
+  rm -rf "$WORKTREES/testrepo.worktrees" "$WORKTREES/wtx_testrepo.worktrees"
 }
 trap cleanup EXIT
 
@@ -30,18 +34,16 @@ git init -b main
 touch README.md
 git add README.md
 git commit -m "init"
-
 git remote add origin .
 
 desc="login feature"
 step "Running: wtx create -d '$desc' --no-open"
-"$WTX_SCRIPT" create -d "$desc" --no-open
+"$WTX_SCRIPT" create -d "$desc" --no-open || fail "wtx create failed"
 
 step "Verifying worktree creation"
-ls "$WORKTREES" | grep -q s001-main-login || fail "Worktree not created"
-
 BRANCH=$(ls "$WORKTREES" | grep s001-main-login)
 WTREE="$WORKTREES/$BRANCH"
+[ -d "$WTREE" ] || fail "Worktree not created"
 
 step "Running: wtx list"
 "$WTX_SCRIPT" list | grep -q "$WTREE" || fail "Worktree not listed"
@@ -64,4 +66,4 @@ cd "$TEST_ROOT"
 step "Verifying worktree removal"
 [ ! -d "$WTREE" ] || fail "Worktree not removed"
 
-step "All wtx flow tests passed!"
+success "All wtx flow tests passed!"
