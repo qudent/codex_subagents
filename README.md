@@ -1,4 +1,4 @@
-NOT updated readme.md yet
+NOT updated readme.md yet. IGNORE THIS. source of truth is currently wtx.sh
 
 # Parallelize your vibecoding by worktrees + tmux!
 ## What?
