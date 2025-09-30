@@ -3,3 +3,4 @@ A comprehensive testing script is at `test_wtx_flow.sh`. The script itself is at
 - The test repo is created under `testing-data/test-repo`.
 - All worktrees are created under `testing-data/<worktree names>`.
 - The script does not touch files/folders outside `testing-data/`.
+- When you commit, you always write specifically what you did and why, you avoid vague terms like "improve"
