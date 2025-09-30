@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # -------- Config (override via env) -----------------------------------------
-WTX_CONTAINER_DEFAULT=""       # if empty, auto: <repo_parent>/<repo>.worktrees
+WTX_CONTAINER_DEFAULT="${WTX_CONTAINER_DEFAULT:-}"       # if empty, auto: <repo_parent>/<repo>.worktrees
 WTX_SESSION_PREFIX="${WTX_SESSION_PREFIX:-wtx}"   # tmux session prefix
 WTX_OSA_OPEN="${WTX_OSA_OPEN:-1}" # on macOS, open Terminal via osascript
 WTX_SHORT_PREFIX="${WTX_SHORT_PREFIX:-s}"         # counter prefix: s001, s002...
@@ -13,7 +13,7 @@ die(){ echo "error: $*" >&2; exit 1; }
 is_macos(){ [[ "$(uname -s)" == "Darwin" ]]; }
 has(){ command -v "$1" >/dev/null 2>&1; }
 git_toplevel(){ git rev-parse --show-toplevel; }
-git_dir(){ git rev-parse --git-dir; }
+git_dir(){ git rev-parse --git-common-dir; }
 safe_slug(){ # letters, digits, dash only
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
 }
@@ -53,7 +53,10 @@ read_meta(){
 all_child_branches_of(){
   local parent="$1"
   local f
-  for f in "$(meta_dir)"/*.env 2>/dev/null; do
+  shopt -s nullglob
+  local files=("$(meta_dir)"/*.env)
+  shopt -u nullglob
+  for f in "${files[@]}"; do
     [[ -f "$f" ]] || continue
     # shellcheck disable=SC1090
     source "$f"
@@ -230,7 +233,7 @@ cmd_open(){
   ensure_tools; ensure_repo
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
   read_meta "$BRANCH" || die "no metadata for '$BRANCH' (was it created with wtx?)"
-  tmux_start_session "$SESSION" "$WORKTREE_DIR"
+  tmux_start_session "$SESSION" "$WORKTREE"
   osascript_open_terminal_attach "$SESSION"
 }
 
@@ -239,8 +242,8 @@ cmd_remove(){
   local branch="${1:-}"
   [[ -z "$branch" ]] && die "usage: wtx remove <branch>"
   read_meta "$branch" || die "unknown branch '$branch'"
-  echo ">> removing worktree $WORKTREE_DIR (branch $branch)"
-  git worktree remove "$WORKTREE_DIR"
+  echo ">> removing worktree $WORKTREE (branch $branch)"
+  git worktree remove "$WORKTREE"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   rm -f "$(meta_file_for "$branch")"
   echo "OK"
@@ -262,7 +265,10 @@ cmd_notify(){
     read_meta "$PARENT_BRANCH" || true  # load parent's session if exists
     targets+=("$PARENT_BRANCH")
   elif [[ "$mode" == "children" ]]; then
-    mapfile -t targets < <(all_child_branches_of "$BRANCH")
+    targets=()
+    while IFS= read -r line; do
+      targets+=("$line")
+    done < <(all_child_branches_of "$BRANCH")
   else
     die "usage: wtx notify_parents|notify_children [--keys] [message]"
   fi

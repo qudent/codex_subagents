@@ -4,12 +4,14 @@ set -euo pipefail
 # Comprehensive wtx test script for codex_subagents
 # All test data is under testing-data/, nothing outside is touched.
 
-TEST_ROOT="testing-data/test-repo"
-WORKTREES="testing-data"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_ROOT="$SCRIPT_DIR/testing-data/test-repo"
+WORKTREES="$SCRIPT_DIR/testing-data"
 REPO_NAME="test-repo"
-WTX_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wtx"
+WTX_SCRIPT="$SCRIPT_DIR/wtx"
 export WTX_OSA_OPEN=0  # Disable macOS Terminal opening for tests
 export WTX_SESSION_PREFIX="wtx_test"  # Avoid collisions with real sessions
+export WTX_CONTAINER_DEFAULT="$WORKTREES"  # Direct worktrees into testing-data
 
 fail()    { echo -e "\n❌ FAIL: $*"; exit 1; }
 step()    { echo -e "\n👉 $*"; }
@@ -19,7 +21,9 @@ cleanup() {
   step "Cleaning up test repo and worktrees"
   rm -rf "$TEST_ROOT"
   # Remove all worktrees created by this test
-  find "$WORKTREES" -maxdepth 1 -type d -name 's*-main-*' -exec rm -rf {} +
+  if [ -d "$WORKTREES" ]; then
+    find "$WORKTREES" -maxdepth 1 -type d -name 's*-main-*' -exec rm -rf {} +
+  fi
   # Remove any old testrepo.worktrees or similar
   rm -rf "$WORKTREES/testrepo.worktrees" "$WORKTREES/wtx_testrepo.worktrees"
 }
