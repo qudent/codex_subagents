@@ -23,6 +23,7 @@
   - Do it again to explore another idea in parallel.
 - Optional: add a description with `-d` (e.g., `wtx create -d login-flow`).
 - List: `wtx list` • Remove: `wtx remove <branch>` • Reopen: `wtx open`
+  - Remove with untracked/modified files: `wtx remove --force <branch>`
 
 **What actually happens**
 - New Git branch (like `sNNN-PARENT[-slug]`).
@@ -45,4 +46,3 @@
 
 **License**
 MIT (see repository).
-

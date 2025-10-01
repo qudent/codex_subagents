@@ -239,11 +239,21 @@ cmd_open(){
 
 cmd_remove(){
   ensure_tools; ensure_repo
-  local branch="${1:-}"
-  [[ -z "$branch" ]] && die "usage: wtx remove <branch>"
+  local force="0" branch=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--force) force="1"; shift ;;
+      *) branch="${1:-}"; shift ;;
+    esac
+  done
+  [[ -z "$branch" ]] && die "usage: wtx remove [--force] <branch>"
   read_meta "$branch" || die "unknown branch '$branch'"
   echo ">> removing worktree $WORKTREE (branch $branch)"
-  git worktree remove "$WORKTREE"
+  if [[ "$force" == "1" ]]; then
+    git worktree remove -f "$WORKTREE"
+  else
+    git worktree remove "$WORKTREE"
+  fi
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   rm -f "$(meta_file_for "$branch")"
   echo "OK"
@@ -324,6 +334,7 @@ USAGE
 
   wtx remove <branch>
       Remove the linked worktree and kill its tmux session. Keeps the git branch.
+      Use --force to remove even with untracked/modified files in the worktree.
 
   wtx notify_parents [--keys] [message]
   wtx notify_children [--keys] [message]
