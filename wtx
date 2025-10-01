@@ -7,6 +7,8 @@ WTX_SESSION_PREFIX="${WTX_SESSION_PREFIX:-wtx}"   # tmux session prefix
 WTX_OSA_OPEN="${WTX_OSA_OPEN:-1}" # on macOS, open Terminal via osascript
 WTX_SHORT_PREFIX="${WTX_SHORT_PREFIX:-s}"         # counter prefix: s001, s002...
 WTX_SCRIPT="${WTX_SCRIPT:-${BASH_SOURCE[0]}}"
+WTX_TMUX_SOCKET="${WTX_TMUX_SOCKET:-}"            # optional tmux socket path (tmux -S)
+WTX_TMUX_MODE="${WTX_TMUX_MODE:-auto}"            # auto|shim|off
 
 # -------- Helpers -----------------------------------------------------------
 die(){ echo "error: $*" >&2; exit 1; }
@@ -120,25 +122,58 @@ npm_install_if_needed(){
   fi
 }
 
+# tmux helpers (support custom socket)
+tmux_cmd(){
+  if [[ -n "${WTX_TMUX_SOCKET:-}" ]]; then
+    # ensure directory exists
+    mkdir -p "$(dirname "$WTX_TMUX_SOCKET")" 2>/dev/null || true
+    tmux -S "$WTX_TMUX_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
+use_tmux(){ [[ "${WTX_TMUX_MODE}" == "auto" ]]; }
+
+shim_session_marker(){ echo "$(meta_dir)/sessions/${1}.session"; }
+shim_start_session(){
+  local session="$1" dir="$2"
+  mkdir -p "$(dirname "$(shim_session_marker "$session")")"
+  printf '%s\n' "DIR=$dir" >"$(shim_session_marker "$session")"
+}
+shim_kill_session(){
+  local session="$1"; rm -f "$(shim_session_marker "$session")" 2>/dev/null || true
+}
+
 tmux_start_session(){
   local session="$1" dir="$2"
   local first_cmd="bash -lc 'source \"$WTX_SCRIPT\"; cd \"$dir\"; wtx env-setup; exec \$SHELL -l'"
-  if tmux has-session -t "$session" 2>/dev/null; then
-    return 0
+  if use_tmux; then
+    if tmux_cmd has-session -t "$session" 2>/dev/null; then
+      return 0
+    fi
+    tmux_cmd new-session -d -s "$session" -c "$dir" "$first_cmd"
+    tmux_cmd set-environment -t "$session" PARENT_BRANCH "$PARENT_BRANCH"
+    tmux_cmd set-environment -t "$session" BRANCH "$BRANCH"
+  else
+    shim_start_session "$session" "$dir"
   fi
-  tmux new-session -d -s "$session" -c "$dir" "$first_cmd"
-  tmux set-environment -t "$session" PARENT_BRANCH "$PARENT_BRANCH"
-  tmux set-environment -t "$session" BRANCH "$BRANCH"
 }
 
 osascript_open_terminal_attach(){
   local session="$1"
   ! is_macos && return 0
   [[ "${WTX_OSA_OPEN}" == "1" ]] || return 0
+  local attach_cmd="tmux attach -t ${session}"
+  if [[ -n "${WTX_TMUX_SOCKET:-}" ]]; then
+    local sock_escaped
+    sock_escaped=$(printf '%q' "$WTX_TMUX_SOCKET")
+    attach_cmd="tmux -S ${sock_escaped} attach -t ${session}"
+  fi
   /usr/bin/osascript <<APPLESCRIPT
 tell application "Terminal"
   activate
-  do script "tmux attach -t ${session}"
+  do script "$attach_cmd"
 end tell
 APPLESCRIPT
 }
@@ -222,9 +257,9 @@ cmd_env_setup(){
   [[ -f "$wd/.env" ]] && dotenv_export "$wd/.env"
   npm_install_if_needed "$wd"
   # Let tmux session inherit
-  if has tmux && tmux display-message -p '#{session_name}' >/dev/null 2>&1; then
-    tmux set-environment PARENT_BRANCH "$PARENT_BRANCH" || true
-    tmux set-environment BRANCH "$BRANCH" || true
+  if has tmux && use_tmux && tmux_cmd display-message -p '#{session_name}' >/dev/null 2>&1; then
+    tmux_cmd set-environment PARENT_BRANCH "$PARENT_BRANCH" || true
+    tmux_cmd set-environment BRANCH "$BRANCH" || true
   fi
   echo "env ready: BRANCH=$BRANCH PARENT_BRANCH=$PARENT_BRANCH"
 }
@@ -239,12 +274,26 @@ cmd_open(){
 
 cmd_remove(){
   ensure_tools; ensure_repo
-  local branch="${1:-}"
-  [[ -z "$branch" ]] && die "usage: wtx remove <branch>"
+  local force="0" branch=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--force) force="1"; shift ;;
+      *) branch="${1:-}"; shift ;;
+    esac
+  done
+  [[ -z "$branch" ]] && die "usage: wtx remove [--force] <branch>"
   read_meta "$branch" || die "unknown branch '$branch'"
   echo ">> removing worktree $WORKTREE (branch $branch)"
-  git worktree remove "$WORKTREE"
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  if [[ "$force" == "1" ]]; then
+    git worktree remove -f "$WORKTREE"
+  else
+    git worktree remove "$WORKTREE"
+  fi
+  if use_tmux; then
+    tmux_cmd kill-session -t "$SESSION" 2>/dev/null || true
+  else
+    shim_kill_session "$SESSION" || true
+  fi
   rm -f "$(meta_file_for "$branch")"
   echo "OK"
 }
@@ -262,8 +311,9 @@ cmd_notify(){
   local targets=()
   if [[ "$mode" == "parents" ]]; then
     if [[ -z "${PARENT_BRANCH:-}" ]]; then die "no PARENT_BRANCH known"; fi
-    read_meta "$PARENT_BRANCH" || true  # load parent's session if exists
-    targets+=("$PARENT_BRANCH")
+    local parent_br="$PARENT_BRANCH"
+    read_meta "$parent_br" || true  # load parent's session if exists
+    targets+=("$parent_br")
   elif [[ "$mode" == "children" ]]; then
     targets=()
     while IFS= read -r line; do
@@ -280,14 +330,21 @@ cmd_notify(){
 
   for br in "${targets[@]}"; do
     read_meta "$br" || continue
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
-      tmux display-message -t "$SESSION" -- "$msg"
-      if [[ "$keys" == "1" ]]; then
-        # send to first pane of first window
-        local pane; pane="$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | head -n1)"
-        tmux send-keys -t "$pane" "$msg" Enter
+    if use_tmux; then
+      if tmux_cmd has-session -t "$SESSION" 2>/dev/null; then
+        tmux_cmd display-message -t "$SESSION" -- "$msg"
+        if [[ "$keys" == "1" ]]; then
+          local pane; pane="$(tmux_cmd list-panes -t "$SESSION" -F '#{pane_id}' | head -n1)"
+          tmux_cmd send-keys -t "$pane" "$msg" Enter
+        fi
+        echo "notified $br ($SESSION)"
       fi
-      echo "notified $br ($SESSION)"
+    else
+      # shim: write display messages, and execute keys as shell in target worktree
+      if [[ -n "${WORKTREE:-}" && -d "${WORKTREE}" ]]; then
+        [[ "$keys" == "1" ]] && (cd "$WORKTREE" && bash -lc "$msg") || echo "$msg" >>"$WORKTREE/wtx.display.log"
+        echo "shim-notified $br ($WORKTREE)"
+      fi
     fi
   done
 }
@@ -324,6 +381,7 @@ USAGE
 
   wtx remove <branch>
       Remove the linked worktree and kill its tmux session. Keeps the git branch.
+      Use --force to remove even with untracked/modified files in the worktree.
 
   wtx notify_parents [--keys] [message]
   wtx notify_children [--keys] [message]
@@ -337,6 +395,8 @@ ENV
   WTX_OSA_OPEN         1 to open macOS Terminal (default 1), 0 to skip
   WTX_SHORT_PREFIX     counter prefix (default s) → s001, s002...
   WTX_CONTAINER_DEFAULT override default container directory for worktrees
+  WTX_TMUX_SOCKET      custom tmux socket path; if set, wtx uses "tmux -S $WTX_TMUX_SOCKET"
+  WTX_TMUX_MODE        tmux control mode: auto (default), shim (no real tmux), off
 
 NOTES
   - Parent branch is recorded and exported as PARENT_BRANCH.
