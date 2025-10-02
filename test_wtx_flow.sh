@@ -20,8 +20,18 @@ success() { echo -e "\n✅ $*"; }
 # Helpers
 meta_file() { echo "$TEST_ROOT/.git/wtx.meta/$1.env"; }
 session_for() { echo "${WTX_SESSION_PREFIX}:$1"; }
-tmux_has() { tmux has-session -t "$1" >/dev/null 2>&1; }
+tmux_safe_session() { echo "${1//:/_}"; }
+tmux_has() { tmux has-session -t "$(tmux_safe_session "$1")" >/dev/null 2>&1; }
 assert_contains() { local file="$1" pat="$2"; grep -E "$pat" "$file" >/dev/null || fail "pattern '$pat' not found in $file"; }
+wait_for_file() {
+  local file="$1" attempts="${2:-20}" delay="${3:-0.1}"
+  local i
+  for ((i=0; i<attempts; i++)); do
+    [[ -f "$file" ]] && return 0
+    sleep "$delay"
+  done
+  return 1
+}
 
 cleanup() {
   step "Cleaning up test repo and worktrees"
@@ -106,22 +116,19 @@ for s in "$PARENT_SESSION" "$CHILD_SESSION" "$GRAND_SESSION"; do tmux_has "$s" |
 step "Child -> Parent via notify_parents --keys (writes to parent's log)"
 cd "$CHILD_WT"
 "$WTX_SCRIPT" notify_parents --keys "printf 'child->parent\n' >> wtx_msgs.log" || fail "notify_parents from child failed"
-sleep 0.2
-[ -f "$PARENT_WT/wtx_msgs.log" ] || fail "Parent log not created by child notification"
+wait_for_file "$PARENT_WT/wtx_msgs.log" 30 0.1 || fail "Parent log not created by child notification"
 grep -q "child->parent" "$PARENT_WT/wtx_msgs.log" || fail "Parent did not receive child's message"
 
 step "Parent -> Child via notify_children --keys (writes to child's log)"
 cd "$PARENT_WT"
 "$WTX_SCRIPT" notify_children --keys "printf 'parent->child\n' >> wtx_msgs.log" || fail "notify_children from parent failed"
-sleep 0.2
-[ -f "$CHILD_WT/wtx_msgs.log" ] || fail "Child log not created by parent notification"
+wait_for_file "$CHILD_WT/wtx_msgs.log" 30 0.1 || fail "Child log not created by parent notification"
 grep -q "parent->child" "$CHILD_WT/wtx_msgs.log" || fail "Child did not receive parent's message"
 
 step "Child -> Grandchild via notify_children --keys"
 cd "$CHILD_WT"
 "$WTX_SCRIPT" notify_children --keys "printf 'child->grand\n' >> wtx_msgs.log" || fail "notify_children from child failed"
-sleep 0.2
-[ -f "$GRAND_WT/wtx_msgs.log" ] || fail "Grandchild log not created by child notification"
+wait_for_file "$GRAND_WT/wtx_msgs.log" 30 0.1 || fail "Grandchild log not created by child notification"
 grep -q "child->grand" "$GRAND_WT/wtx_msgs.log" || fail "Grandchild did not receive child's message"
 
 step "Grandchild notify_children reports no targets"
