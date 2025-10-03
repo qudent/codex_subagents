@@ -36,12 +36,11 @@
 - Child → parent: `wtx notify_parents --keys "printf 'done!\n' >> wtx_msgs.log"`
 
 **Defaults and config**
-- Today, `-p` (parent branch) defaults to `main`. You can pass `-p <branch>` to override.
+- Default parent is the branch you are currently on. Pass `-p <branch>` to override. If `HEAD` is detached, branches from that exact commit.
 - `WTX_SESSION_PREFIX` (default `wtx`), `WTX_OSA_OPEN` (macOS: `1` to open Terminal),
   `WTX_SHORT_PREFIX` (default `s`), `WTX_CONTAINER_DEFAULT` (override `<repo>.worktrees`).
 
 **Heads‑up**
-- We plan to make the default parent “the branch you’re currently on” instead of `main` (see TODO.md).
 - Tiny tmux primer: it’s just a terminal that keeps running. Attach: `tmux attach -t wtx:<branch>`; detach: `Ctrl+B`, then `D`.
 
 **License**

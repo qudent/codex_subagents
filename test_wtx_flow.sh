@@ -45,7 +45,15 @@ git config user.name "WTX Tester"
 echo "# Test" > README.md
 git add README.md
 git commit -m "Initialize sandbox repo for wtx tests: add README for clarity"
-git remote add origin .
+
+# Sanity: default parent should be current branch (main here)
+step "Default parent = current branch (on main)"
+"$WTX_SCRIPT" create -d "default-main" --no-open | tee create_default_main.out
+DEF_MAIN_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_default_main.out)
+[ -n "${DEF_MAIN_BRANCH:-}" ] || fail "Could not parse default-main branch from wtx output"
+[ -f "$(meta_file "$DEF_MAIN_BRANCH")" ] || fail "No meta for default-main"
+assert_contains "$(meta_file "$DEF_MAIN_BRANCH")" "^PARENT_BRANCH=main$"
+"$WTX_SCRIPT" remove --force "$DEF_MAIN_BRANCH" || fail "remove default-main failed"
 
 # 1) Create parent
 desc_parent="alpha"
@@ -68,6 +76,26 @@ step "env-setup inside parent"
 cd "$PARENT_WT"
 "$WTX_SCRIPT" env-setup | grep -q "env ready: BRANCH=$PARENT_BRANCH PARENT_BRANCH=main" || fail "env-setup output mismatch in parent"
 
+# Sanity: switch repo to a non-main branch and ensure default parent follows
+cd "$TEST_ROOT"
+git checkout -b dev
+echo "dev file" > dev.txt
+git add dev.txt
+git commit -m "Create dev branch with a file to verify default parent behavior on non-main"
+step "Default parent = current branch (on dev)"
+"$WTX_SCRIPT" create -d "default-dev" --no-open | tee create_default_dev.out
+DEF_DEV_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_default_dev.out)
+[ -n "${DEF_DEV_BRANCH:-}" ] || fail "Could not parse default-dev branch from wtx output"
+DEF_DEV_META="$(meta_file "$DEF_DEV_BRANCH")"
+[ -f "$DEF_DEV_META" ] || fail "No meta for default-dev"
+assert_contains "$DEF_DEV_META" "^PARENT_BRANCH=dev$"
+DEF_DEV_WT="$WORKTREES/$DEF_DEV_BRANCH"
+[ -d "$DEF_DEV_WT" ] || fail "default-dev worktree not created"
+"$WTX_SCRIPT" remove --force "$DEF_DEV_BRANCH" || fail "remove default-dev failed"
+
+# Return to the parent worktree before testing open/session behavior
+cd "$PARENT_WT"
+
 step "open parent session and verify tmux session exists"
 "$WTX_SCRIPT" open || fail "open failed for parent"
 PARENT_SESSION="$(session_for "$PARENT_BRANCH")"
@@ -76,16 +104,16 @@ tmux_has "$PARENT_SESSION" || fail "tmux session not present for parent: $PARENT
 # 2) Create child and grandchild
 cd "$TEST_ROOT"
 desc_child="beta"
-step "Creating child of $PARENT_BRANCH (local base)"
-"$WTX_SCRIPT" create -p "$PARENT_BRANCH" --base refs/heads -d "$desc_child" --no-open | tee create_child.out
+step "Creating child of $PARENT_BRANCH"
+"$WTX_SCRIPT" create -p "$PARENT_BRANCH" -d "$desc_child" --no-open | tee create_child.out
 CHILD_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_child.out)
 [ -n "${CHILD_BRANCH:-}" ] || fail "Could not parse child branch from wtx output"
 CHILD_WT="$WORKTREES/$CHILD_BRANCH"
 [ -d "$CHILD_WT" ] || fail "Child worktree not created"
 
 desc_grand="gamma"
-step "Creating grandchild of $CHILD_BRANCH (local base)"
-"$WTX_SCRIPT" create -p "$CHILD_BRANCH" --base refs/heads -d "$desc_grand" --no-open | tee create_grand.out
+step "Creating grandchild of $CHILD_BRANCH"
+"$WTX_SCRIPT" create -p "$CHILD_BRANCH" -d "$desc_grand" --no-open | tee create_grand.out
 GRAND_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_grand.out)
 [ -n "${GRAND_BRANCH:-}" ] || fail "Could not parse grandchild branch from wtx output"
 GRAND_WT="$WORKTREES/$GRAND_BRANCH"

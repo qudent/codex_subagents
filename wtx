@@ -123,12 +123,24 @@ npm_install_if_needed(){
 tmux_start_session(){
   local session="$1" dir="$2"
   local first_cmd="bash -lc 'source \"$WTX_SCRIPT\"; cd \"$dir\"; wtx env-setup; exec \$SHELL -l'"
-  if tmux has-session -t "$session" 2>/dev/null; then
-    return 0
+  # Derive tmux session name and desired window from the provided target like "prefix:branch"
+  local sess_name="${session%%:*}"
+  local win_name
+  if [[ "$session" == *:* ]]; then
+    win_name="${session#*:}"
+  else
+    win_name="$BRANCH"
   fi
-  tmux new-session -d -s "$session" -c "$dir" "$first_cmd"
-  tmux set-environment -t "$session" PARENT_BRANCH "$PARENT_BRANCH"
-  tmux set-environment -t "$session" BRANCH "$BRANCH"
+  if tmux has-session -t "$sess_name" 2>/dev/null; then
+    # Ensure a window named $win_name exists; create if missing
+    if ! tmux list-windows -t "$sess_name" -F '#{window_name}' | grep -Fxq "$win_name"; then
+      tmux new-window -t "$sess_name" -n "$win_name" -c "$dir" "$first_cmd"
+    fi
+  else
+    tmux new-session -d -s "$sess_name" -n "$win_name" -c "$dir" "$first_cmd"
+  fi
+  tmux set-environment -t "$sess_name" PARENT_BRANCH "$PARENT_BRANCH"
+  tmux set-environment -t "$sess_name" BRANCH "$BRANCH"
 }
 
 osascript_open_terminal_attach(){
@@ -149,20 +161,29 @@ cmd_create(){
   ensure_tools; ensure_repo
   local repo_root; repo_root="$(git_toplevel)"
   local repo_git; repo_git="$(git_dir)"
-  local parent="main"
+  # Default parent: current branch if available, else HEAD (detached HEAD case)
+  local cur
+  cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  local parent
+  local base_ref
+  if [[ -n "$cur" && "$cur" != "HEAD" ]]; then
+    parent="$cur"
+    base_ref="refs/heads/${parent}"
+  else
+    # Detached HEAD: use the commit SHA as parent name and HEAD as base
+    parent="$(git rev-parse --short HEAD)"
+    base_ref="HEAD"
+  fi
   local desc=""
-  local base="origin"
   local open="1"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -p|--parent) parent="${2:-}"; shift 2;;
+      -p|--parent) parent="${2:-}"; base_ref="refs/heads/${2:-}"; shift 2;;
       -d|--desc) desc="${2:-}"; shift 2;;
       --no-open) open="0"; shift;;
-      --base) base="${2:-}"; shift 2;;
       *) die "unknown option: $1";;
     esac
   done
-  git fetch --prune --tags || true
 
   local cnum; cnum="$(counter_next "$repo_git")"
   local slug; slug="$(safe_slug "$desc")"
@@ -180,7 +201,8 @@ cmd_create(){
   WORKTREE_DIR="$cont/$BRANCH"
 
   echo ">> creating worktree: $WORKTREE_DIR for branch $BRANCH (parent: $PARENT_BRANCH)"
-  git worktree add -B "$BRANCH" "$WORKTREE_DIR" "${base}/${PARENT_BRANCH}"
+  # Always branch from local refs; no remote usage
+  git worktree add -B "$BRANCH" "$WORKTREE_DIR" "$base_ref"
 
   # encode parent in branch name (already done) and store metadata
   SESSION="${WTX_SESSION_PREFIX}:${BRANCH}"
@@ -254,7 +276,8 @@ cmd_remove(){
   else
     git worktree remove "$WORKTREE"
   fi
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # Close just the window for this branch within the session prefix; this preserves other windows
+  tmux kill-window -t "$SESSION" 2>/dev/null || true
   rm -f "$(meta_file_for "$branch")"
   echo "OK"
 }
@@ -290,10 +313,12 @@ cmd_notify(){
 
   for br in "${targets[@]}"; do
     read_meta "$br" || continue
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
+    # Check the base session (without window suffix)
+    local sess_name="${SESSION%%:*}"
+    if tmux has-session -t "$sess_name" 2>/dev/null; then
       tmux display-message -t "$SESSION" -- "$msg"
       if [[ "$keys" == "1" ]]; then
-        # send to first pane of first window
+        # send to first pane of the target window
         local pane; pane="$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | head -n1)"
         tmux send-keys -t "$pane" "$msg" Enter
       fi
@@ -320,7 +345,7 @@ usage(){
 wtx — worktree↔branch manager with tmux + env bootstrap
 
 USAGE
-  wtx create [-p|--parent PARENT] [-d|--desc "words"] [--no-open] [--base origin]
+  wtx create [-p|--parent PARENT] [-d|--desc "words"] [--no-open]
       Create a new branch & linked worktree under <repo>.worktrees/.
       Branch name: sNNN-PARENT[-slug], e.g., s003-main-login
       Starts tmux session and (on macOS) opens Terminal attached.
@@ -352,7 +377,7 @@ ENV
 NOTES
   - Parent branch is recorded and exported as PARENT_BRANCH.
   - Metadata lives at: $(git_dir 2>/dev/null || echo "<repo>/.git")/wtx.meta/<branch>.env
-  - Each worktree gets a tmux session named "${WTX_SESSION_PREFIX}:<branch>".
+  - Each worktree opens a window named "<branch>" inside tmux session "${WTX_SESSION_PREFIX}".
 EOF
 }
 
