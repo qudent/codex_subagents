@@ -132,10 +132,9 @@ tmux_start_session(){
   tmux_name="$(tmux_safe_session_name "$session")"
   local first_cmd="bash -lc 'cd \"$dir\"; \"$WTX_SCRIPT\" env-setup; exec \$SHELL -l -i'"
   if tmux has-session -t "$tmux_name" 2>/dev/null; then
-    tmux respawn-window -k -t "$tmux_name":0 -c "$dir" "$first_cmd"
-  else
-    tmux new-session -d -s "$tmux_name" -c "$dir" "$first_cmd"
+    return 0
   fi
+  tmux new-session -d -s "$tmux_name" -c "$dir" "$first_cmd"
   tmux set-environment -t "$tmux_name" PARENT_BRANCH "$PARENT_BRANCH"
   tmux set-environment -t "$tmux_name" BRANCH "$BRANCH"
 }
@@ -313,9 +312,6 @@ cmd_notify(){
         keys_msg="${msg//\\/\\\\}"
         tmux send-keys -t "$pane" "cd \"$WORKTREE\"" Enter
         tmux send-keys -t "$pane" "$keys_msg" Enter
-        local run_cmd
-        run_cmd="cd \"$WORKTREE\" && bash -lc $(printf %q "$msg")"
-        tmux run-shell -t "$pane" "$run_cmd"
       fi
       echo "notified $br ($SESSION)"
     fi
