@@ -3,11 +3,14 @@
 Vision
 - One terminal window per agent (tmux session). No in-place session switching.
 - Two-command experience for most users: create a new attempt, and see attempts.
+- Syntax reminds of `git worktree (add|list)`
 - Messaging of new commits: `wtx message` includes the latest commit, and a sentence like "latest commit: <message> `git merge <commit-hash> in your window to merge the latest changes`")" in each message to notify parents/children of updates.
+- `finish_worktree` or quitting tmux automatically sends message that something is ready to merge etc.
 - Cleanup is automatic or one-shot; no dangling worktrees/branches/sessions.
 
 Immediate Changes
-- `wtx ls` should show the mapping users need.
+- change `wtx ls` to `wtx list`
+- `wtx list` should show the mapping users need.
   - Show: `branch`, `parent`, `path`, `session`, `state(running|missing)`.
   - Source from `.git/wtx.meta/<branch>.env` and `tmux has-session`.
   - path shows the intended worktree dir, and we annotate if it’s absent: path=/…/
