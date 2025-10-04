@@ -10,11 +10,24 @@ Immediate Changes
 - `wtx ls` should show the mapping users need.
   - Show: `branch`, `parent`, `path`, `session`, `state(running|missing)`.
   - Source from `.git/wtx.meta/<branch>.env` and `tmux has-session`.
-  - Add `--json` output for tooling (optional).
+  - path shows the intended worktree dir, and we annotate if it’s absent: path=/…/
+  s003-main-login (missing)
+
+  So a typical line would read:
+
+  - branch, parent, path=/…/s003-main-login, session=wtx:s003-main-login,
+  state=running
+
+  And stale cases are obvious:
+
+  - path=… (missing), session=wtx:… , state=missing → prune will delete the
+  metadata/branch residue.
+  - path=… (present), session=wtx:… , state=missing → prune will remove session
+  metadata and branch if needed (per your rule: if any piece is stale, delete
+  the rest).
 
 - `wtx rm <branch>` must delete everything by default.
   - Delete tmux session, worktree folder, and the git branch.
-  - Add `--keep-branch` if someone needs to retain the branch.
 
 - `wtx prune` reconciles stale state.
   - For each meta entry: if any of worktree/branch/session is missing, delete the rest and remove metadata.
@@ -23,6 +36,8 @@ Immediate Changes
 - Cross‑platform window open.
   - Keep macOS `osascript` default; support `WTX_OPEN_CMD` for Linux/BSD (e.g., `alacritty -e`, `kitty -e`, `gnome-terminal --`).
   - Always open a new window attached to the session (no attach-in-place command).
+  - If `WTX_OPEN_CMD` is set, use it verbatim to run `bash -lc 'tmux attach -t <session>'`.
+  - Headless/SSH: if no GUI terminal is found (or no display), print the exact attach command and return success without blocking.
 
 - Messaging unification (advanced).
   - Replace `notify_parents`/`notify_children` with `wtx message [--policy parents|children|all] [--keys] <msg>`.
@@ -35,11 +50,6 @@ README Simplification
 - Show only: `wtx ls`, `wtx open <branch>`, `wtx rm <branch>`, `wtx prune`.
 - Move `-p/--parent` to Advanced with guidance: “checkout desired parent, then run `wtx create`.”
 - Move tmux primer, env bootstrap details, and messaging to Advanced.
-
-Reconciled Items (status and decisions)
-- Default parent branch = current branch.
-  - Status: DONE. Current `cmd_create` uses the current branch as parent (falls back to HEAD when detached). Tests already cover main/dev defaults in `test_wtx_flow.sh`.
-  - Action: Update README to remove any implication of defaulting to `main`.
 
 - Env var naming
   - Goal: All exported env vars should be `WTX_…` (e.g., `WTX_PARENT_BRANCH`, `WTX_BRANCH`, `WTX_SESSION`, `WTX_WORKTREE`).
