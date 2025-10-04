@@ -3,6 +3,7 @@
 Vision
 - One terminal window per agent (tmux session). No in-place session switching.
 - Two-command experience for most users: create a new attempt, and see attempts.
+- Messaging of new commits: `wtx message` includes the latest commit, and a sentence like "latest commit: <message> `git merge <commit-hash> in your window to merge the latest changes`")" in each message to notify parents/children of updates.
 - Cleanup is automatic or one-shot; no dangling worktrees/branches/sessions.
 
 Immediate Changes
@@ -73,8 +74,8 @@ Reconciled Items (status and decisions)
   - Observation: “venv entering doesn’t seem to work.” Current behavior: we only activate if `.venv/bin/activate` exists in the worktree. We symlink `.venv` from repo root if present; we do not create a venv.
   - Plan: Document clearly; optionally add `WTX_VENV_AUTO_CREATE=python3 -m venv .venv` hook for users who want auto‑creation (off by default to avoid surprises).
 
-Nice‑to‑Have (later)
-- `wtx watch` helper that opens a tiny dashboard (`watch -n1 wtx ls` or a portable loop) in a new window.
+Nice‑to‑Have (NOT NOW)
+- automatically open a tiny dashboard (`watch -n1 wtx ls` or a portable loop) in a new window+tmux if not yet visible.
 - `wtx doctor` to validate git/tmux availability and OS opener config.
 - `wtx rename <old> <new>` to move branch/worktree/meta coherently (defer until core is stable).
 
