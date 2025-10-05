@@ -3,7 +3,19 @@
 ## Vision
 - One tmux session per agent; no inline session switching.
 - Keep functionality minimal and agent-focused.
-- `wtx create` adds worktree in `<repo>.worktrees/<name>`, links `.venv`, activates the environment, runs installs, and names the tmux session `repo/branch`.
+- `wtx open` opens a tmux associated with every branch.
+- `wtx open [branch] [-c 'string']` sends 'string' to the branch. the following state:
+   - branch `branch` exists (if not given as argument, it creates a new branch based on the current branches name and the parent branch.)
+   - `branch` is open in some worktree (if not exists or worktree prunable, prunes and recreates. it makes sure to link .env, .venv, and run pnpm install in the worktree)
+   - there is a tmux whose name correponds to the repo+branch name (if that doesn't exist, it starts it, also exports env vars from .env and runs source .venv/bin/activate if applicable)
+   - unless `WTX_GUI_OPEN` is set to 0, open gui window
+   - type the command `string` into that terminal with tmux send-keys if this was given by -c.
+   
+   for an open branch, or for a new branch based on current commit and name in running counter if [branch] is not given:
+   - does a `git worktree list`
+   - if [branch] doesn't exist, create a branch and writes parent branch (where it was branched off from) into description/parents. naming scheme as in current code.
+   - creates a worktree for that branch in `<repo>.worktrees/<name>` if that doesn't yet exist (or has been deleted/is prunable)
+   - links `.venv`, activates the environment, runs installs, and names the tmux session `repo/branch`.
 - `wtx message` is the primary communication channel; hashtag-prefixed updates share merge commands.
 
 ## Phase 1 – Core Agent Loop
@@ -24,7 +36,7 @@
 will be the way to do it
 
 
-- [ ] run a refactor/tightening/making concise of wtx
+- [ ] run a refactor/tightening/making concise of wtx code
 - [ ] double check that README etx doesn't contain anything of previous README.md
 ## Phase 2 – Refinement
 - [ ] Implement `wtx finish` to merge, announce completion, and optionally prune.
