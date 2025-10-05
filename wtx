@@ -8,7 +8,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 WTX_CONTAINER_DEFAULT="${WTX_CONTAINER_DEFAULT:-}"   # overrides worktree parent dir
 WTX_MESSAGING_POLICY="${WTX_MESSAGING_POLICY:-all}"  # parent,children,all
-WTX_OSA_OPEN="${WTX_OSA_OPEN:-1}"                     # 1 to auto-launch macOS Terminal via osascript
+WTX_GUI_OPEN="${WTX_GUI_OPEN:-1}"                     # 1 to auto-launch macOS Terminal via osascript
 
 # Absolute path to this script for use in git hooks
 WTX_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -109,7 +109,7 @@ link_shared_environment(){
 osascript_terminal_attach(){
   local session="$1"
   is_macos || return 0
-  [[ "$WTX_OSA_OPEN" == "1" ]] || return 0
+  [[ "$WTX_GUI_OPEN" == "1" ]] || return 0
   local osa="$(command -v osascript 2>/dev/null || true)"
   if [[ -z "$osa" ]]; then
     if [[ -x /usr/bin/osascript ]]; then
@@ -452,7 +452,7 @@ Usage:
 Environment:
   WTX_CONTAINER_DEFAULT  Override worktree parent directory
   WTX_MESSAGING_POLICY   Target policy for `wtx message` (parent, children, all) - default parent+children
-  WTX_OSA_OPEN           Auto-launch macOS Terminal when creating sessions (default 1)
+  WTX_GUI_OPEN           Auto-launch macOS Terminal when creating sessions (default 1)
 USAGE
 }
 
