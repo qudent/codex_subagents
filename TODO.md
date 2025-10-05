@@ -4,7 +4,7 @@ Vision
 - One terminal window per agent (tmux session). No in-place session switching.
 - absolutely minimal functionality:
 - "wtx create" adds worktree in git_root_dir/../<repo-name>.worktrees/<name>. Parent branch in branch description, "wtx create <name>" adds a specific name, if <name> not set, its a name derived from parent scheme + running counter. "wtx create <name> -c "<command>"" sends <command> and enter after spinning up. Spinning up involves linking .venv, source .venv/bin/activate, and pnpm install where applicable. tmux naming scheme reflects repo+branch name.
-- "wtx message" messages according to WTX_MESSAGING_POLICY (default -- parent, children, possible: parents, children, all) about current commit, commit message, hash, precise command that target needs to enter to merge that commit.
+- "wtx message" messages according to WTX_MESSAGING_POLICY (default -- parent, children, possible: parents, children, all, none) about current commit, commit message, hash, precise command that target needs to enter to merge that commit.
 - "empty git commit for sending messages and logging things without changing files (e.g. "NOTIF: ran tests")"
 - "wtx prune" kills stale worktrees
 
@@ -97,16 +97,16 @@ The plan is still about ruthless prioritization, but now messaging is in the top
 ### Your New, Agent-Focused TODO List
 
 **Phase 1: The Core Agent Loop**
-- [ ] **Implement `wtx create <name>`**
-    - [ ] Creates worktree, branch, and `tmux` session.
-    - [ ] Runs the env/venv setup, links things, `pnpm install`, sources/exports .env env vars, etc.
-    - [ ] **Installs a `post-commit` hook** that automatically runs `wtx message`.
-- [ ] **Implement `wtx message "<msg>"`**
-    - [ ] Finds parent and child branches.
-    - [ ] Constructs message with commit hash, commit message and merge command.
-    - [ ] Uses `tmux send-keys` to inject the message into target sessions.
-- [ ] **Implement `wtx list`** (as before)
-- [ ] **Implement `wtx prune`** (as before)
+- [x] **Implement `wtx create <name>`**
+    - [x] Creates worktree, branch, and `tmux` session.
+    - [x] Runs the env/venv setup, links things, `pnpm install`, sources/exports .env env vars, etc.
+    - [x] **Installs a `post-commit` hook** that automatically runs `wtx message`.
+- [x] **Implement `wtx message "<msg>"`**
+    - [x] Finds parent and child branches.
+    - [x] Constructs message with commit hash, commit message and merge command.
+    - [x] Uses `tmux send-keys` to inject the message into target sessions.
+- [x] **Implement `wtx list`** (as before)
+- [x] **Implement `wtx prune`** (as before)
 - [ ] **Write a minimal README.md**
     - [ ] Document the agent workflow: `wtx create`, make changes, `git commit` (auto-messages), exiting tmux, `wtx prune`
     - [ ] Document `wtx list` as wrapper for `git worktree list`.
