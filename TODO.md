@@ -2,95 +2,125 @@
 
 Vision
 - One terminal window per agent (tmux session). No in-place session switching.
-- Two-command experience for most users: create a new attempt, and see attempts.
-- Syntax reminds of `git worktree (add|list)`
-- Messaging of new commits: `wtx message` includes the latest commit, and a sentence like "latest commit: <message> `git merge <commit-hash> in your window to merge the latest changes`")" in each message to notify parents/children of updates.
-- `finish_worktree` or quitting tmux automatically sends message that something is ready to merge etc.
-- Cleanup is automatic or one-shot; no dangling worktrees/branches/sessions.
+- absolutely minimal functionality:
+- "wtx create" adds worktree in git_root_dir/../<repo-name>.worktrees/<name>. Parent branch in branch description, "wtx add <name>" adds a specific name, if <name> not set, its a name derived from parent scheme + running counter. "wtx add <name> -c "<command>"" sends <command> and enter after spinning up. Spinning up involves linking .venv, source .venv/bin/activate, and pnpm install where applicable. tmux naming scheme reflects repo+branch name.
+- "wtx message" messages according to WTX_MESSAGING_POLICY (default -- parent, children, possible: parents, children, all) about current commit, commit message, hash, precise command that target needs to enter to merge that commit.
+- "empty git commit for sending messages and logging things without changing files (e.g. "NOTIF: ran tests")"
+- "wtx prune" kills stale worktrees
 
-Immediate Changes
-- change `wtx ls` to `wtx list`
-- `wtx list` should show the mapping users need.
-  - Show: `branch`, `parent`, `path`, `session`, `state(running|missing)`.
-  - Source from `.git/wtx.meta/<branch>.env` and `tmux has-session`.
-  - path shows the intended worktree dir, and we annotate if it’s absent: path=/…/
-  s003-main-login (missing)
+You are absolutely right. My apologies for misreading the core purpose. If these are terminals for **coding agents**, then messaging isn't a feature—it's the central nervous system. Thank you for the clarification. That changes everything.
 
-  So a typical line would read:
+Let's put messaging back at the heart of the plan, but design it to be as simple and automatic as possible, based on your feedback.
 
-  - branch, parent, path=/…/s003-main-login, session=wtx:s003-main-login,
-  state=running
+---
 
-  And stale cases are obvious:
+### The New, Simplified Philosophy (Agent Edition)
 
-  - path=… (missing), session=wtx:… , state=missing → prune will delete the
-  metadata/branch residue.
-  - path=… (present), session=wtx:… , state=missing → prune will remove session
-  metadata and branch if needed (per your rule: if any piece is stale, delete
-  the rest).
+**The Goal:** `wtx` is an orchestration tool for autonomous coding agents. It creates isolated environments and provides the primary communication channel (`wtx message`) for them to coordinate their work.
 
-- `wtx rm <branch>` must delete everything by default.
-  - Delete tmux session, worktree folder, and the git branch.
+**The Mantra:** *Agents commit, and `wtx` tells the other agents what to do next.*
 
-- `wtx prune` reconciles stale state.
-  - For each meta entry: if any of worktree/branch/session is missing, delete the rest and remove metadata.
-  - Safe by construction: acts only on entries under this repo’s metadata.
+---
 
-- Cross‑platform window open.
-  - Keep macOS `osascript` default; support `WTX_OPEN_CMD` for Linux/BSD (e.g., `alacritty -e`, `kitty -e`, `gnome-terminal --`).
-  - Always open a new window attached to the session (no attach-in-place command).
-  - If `WTX_OPEN_CMD` is set, use it verbatim to run `bash -lc 'tmux attach -t <session>'`.
-  - Headless/SSH: if no GUI terminal is found (or no display), print the exact attach command and return success without blocking.
+### The Radically Simplified `wtx message`
 
-- Messaging unification (advanced).
-  - Replace `notify_parents`/`notify_children` with `wtx message [--policy parents|children|all] [--keys] <msg>`.
-  - Support `WTX_MESSAGING_POLICY` default. Keep as advanced docs, not in Quickstart.
+The complexity was in the options. Let's remove them. The command should have one job and do it well.
 
-README Simplification
-- Lead with the “two commands” flow:
-  - `wtx create -d "idea"` opens a new window for the attempt.
-  - Run again for parallel attempts. Use your OS to switch between windows.
-- Show only: `wtx ls`, `wtx open <branch>`, `wtx rm <branch>`, `wtx prune`.
-- Move `-p/--parent` to Advanced with guidance: “checkout desired parent, then run `wtx create`.”
-- Move tmux primer, env bootstrap details, and messaging to Advanced.
+**The Command:**
+```bash
+wtx message
+```
 
-- Env var naming
-  - Goal: All exported env vars should be `WTX_…` (e.g., `WTX_PARENT_BRANCH`, `WTX_BRANCH`, `WTX_SESSION`, `WTX_WORKTREE`).
-  - Current: Mixed — meta and tmux export `BRANCH`, `PARENT_BRANCH`, `SESSION`, `WORKTREE` without `WTX_` prefix.
-  - Plan:
-    - Add `WTX_…` exports alongside current names for backward compatibility.
-    - Mark unprefixed names as deprecated in README (keep them for now).
-    - Update tests once the transition is complete.
+**What it Does (The Internal Logic):**
+1.  **Identify Targets:** It automatically finds the parent branch (from the Git branch description) and all child branches (by scanning other branches' descriptions to see if they list the current branch as a parent).
+2.  **Get Context:** It grabs the current commit hash (`HEAD`) and commit message.
+3.  **Construct the Message:** It creates a clear, actionable message string.
+    ```
+    # [wtx from feature/auth]: new git commit with message: Update:... To integrate these changes, run: `git merge a1b2c3d`
+    ```
 
-- Reduce options / fewer footguns
-  - Hide `-p` from Quickstart; keep as Advanced only.
-  - No “session switching” verbs; always open a new OS window attached.
-  - Keep `env-setup` as an internal boot step; don’t document as a user action.
+    hashtag is important so that shell will parse it as comment. Newline only at the end.
+4.  **Send via `tmux`:** For each target (parent and children), it finds the corresponding `tmux` session and uses `tmux send-keys` to type the entire message string into the terminal, followed by `Enter`.
+`WTX_MESSAGING_POLICY="parent,children" wtx message` sends a message to parent, children (default). Default: messaging policy is "all".
 
-- Branch management “inside”
-  - `wtx rm` deletes the git branch by default (and tmux/worktree). Provide `--keep-branch` to retain.
-  - `wtx prune` removes any half‑state across tmux/worktree/branch.
+**Key Simplifications:**
+*   **No `--policy` flag.** The default, most useful behavior is to message both parents and children. This is what you want 99% of the time. We can add an env var `WTX_MESSAGING_POLICY` for power users later, but the base command has no options.
+*   **No `--keys` flag.** As you said, it always sends keys. The option is redundant.
+*   **The message includes the command.** This is critical. It's not just a notification; it explains what needs to be done.
 
-- Session prefix naming
-  - Request: Session prefix should default to the repo directory name instead of `wtx`; collisions are acceptable.
-  - Plan: Change default of `WTX_SESSION_PREFIX` to `$(basename $(git rev-parse --show-toplevel))` and keep the env var override.
+---
 
-- Finish/Merge UX
-  - Idea: `wtx finish` to guide merge (e.g., back to parent/main) and cleanup.
-  - Plan: Start minimal: print exact merge commands and offer `--cleanup` to run `rm` on success. Keep out of Quickstart.
+### The Actionable Plan (Revised with Messaging)
 
-- Commit/cleanup messaging
-  - Idea: Emit a commit message template or tmux note on cleanup/finish with how to merge.
-  - Plan: Add optional `WTX_FINISH_NOTE=1` to append to a repo‑local log or display via tmux when `finish` runs.
+The plan is still about ruthless prioritization, but now messaging is in the top tier.
 
-- venv activation report
-  - Observation: “venv entering doesn’t seem to work.” Current behavior: we only activate if `.venv/bin/activate` exists in the worktree. We symlink `.venv` from repo root if present; we do not create a venv.
-  - Plan: Document clearly; optionally add `WTX_VENV_AUTO_CREATE=python3 -m venv .venv` hook for users who want auto‑creation (off by default to avoid surprises).
+#### **Phase 1: The Core Agent Loop**
 
-Nice‑to‑Have (NOT NOW)
-- automatically open a tiny dashboard (`watch -n1 wtx ls` or a portable loop) in a new window+tmux if not yet visible.
-- `wtx doctor` to validate git/tmux availability and OS opener config.
-- `wtx rename <old> <new>` to move branch/worktree/meta coherently (defer until core is stable).
+1.  **`wtx create`:** (As before)
+    *   Creates worktree and `tmux` session (branch is implicitly automatically created by git)
+    ` "New commit made by worker in branch <branch>: $(git log -1 --pretty=%s). Merge by the following command: git merge <commit_hash>"`
+    *   **NEW:** Installs a simple `post-commit` it hook into the new worktree. It looks like this:
+        *   `.git/hooks/post-commit`:
+            ```bash
+            #!/bin/sh
+            wtx message
+            ```
+        *   This makes messaging **automatic and effortless**. Every `git commit` triggers the communication.
 
-Notes for Tests
-- Keep `test_wtx_flow.sh` comprehensive. Add a fast smoke test that does: create → ls → open → rm (no messaging) for contributor sanity.
+2.  **`wtx list`:** (As before)
+    *   git worktree list together with parent (from description, if exists), and whether it is "activated" with a corresponding tmux, and the name of that tmux. Contains instruction like "Enter worktree by tmux attach $(wtx worktree-to-tmux <path>)" or so.
+
+3.  **`wtx message`:** (The New, Simplified Version)
+    *   Implement the logic described above: find parent/children, construct message, `tmux send-keys`.
+    *   This is the engine of the agent workflow.
+
+4.  **`wtx prune`:** (As before)
+    *   The cleanup hammer for stale worktrees.
+
+**Result of Phase 1:** You now have a fully functional system for creating agents and having them automatically broadcast their progress to other relevant agents after every commit. This is a powerful and coherent workflow.
+
+---
+
+#### **Phase 2: Refinement and Cleanup**
+
+1.  **`wtx finish`:** (Even more useful now)
+    *   When an agent is done, a human (or a supervising agent) runs `wtx finish`.
+    *   It prints something like "finishing" for the parent branch, deletes branch, prints merge command for commit hash
+    *   It offers to `prune` the agent's worktree upon successful merge.
+
+2.  **Environment Variables & Naming:** (As before)
+    *   Standardize on `WTX_...`.
+    *   Change session prefix to the repo name.
+
+---
+
+### Your New, Agent-Focused TODO List
+
+**Phase 1: The Core Agent Loop**
+- [ ] **Implement `wtx create <name>`**
+    - [ ] Creates worktree, branch, and `tmux` session.
+    - [ ] **Installs a `post-commit` hook** that automatically runs `wtx message`.
+- [ ] **Implement `wtx message "<msg>"`**
+    - [ ] Finds parent and child branches.
+    - [ ] Constructs message with commit hash, commit message and merge command.
+    - [ ] Uses `tmux send-keys` to inject the message into target sessions.
+- [ ] **Implement `wtx list`** (as before)
+- [ ] **Implement `wtx prune`** (as before)
+- [ ] **Write a minimal README.md**
+    - [ ] Document the agent workflow: `wtx create`, make changes, `git commit` (auto-messages), exiting tmux, `wtx prune`
+    - [ ] Document `wtx list` as wrapper for `git worktree list`
+
+**Phase 2: Refinement**
+- [ ] **Implement `wtx finish`**
+- [ ] **Standardize Environment Vars & Naming**
+
+This plan respects the core vision of an agent orchestration tool. It puts the most critical feature—messaging—front and center, but strips away the configuration complexity that bogged it down before. This feels like the right path.
+
+install script/README should contain, so that tmuxes are more usable:
+```
+# Enable mouse support (scrolling, resizing, selecting panes)
+set -g mouse on
+
+# Large scrollback buffer
+set -g history-limit 100000tmux source-file ~/.tmux.conf
+```
