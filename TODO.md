@@ -12,8 +12,8 @@
 - [x] Implement `wtx list` as a wrapper around `git worktree list`.
 - [x] Implement `wtx prune` to remove stale worktrees.
 - [x] Write a minimal `README.md` outlining the agent workflow (`wtx create`, commit triggers `wtx message`, exit tmux, `wtx prune`) and documenting `wtx list`.
-- [ ] in the help text when running wtx, include a short phrase explaining what the commands do
-- [ ] wtx prune should also delete the branches, not just the worktrees (--force for deleting unmerged/uncommitted changes). but only the branches starting with the prefix.
+- [x] in the help text when running wtx, include a short phrase explaining what the commands do
+- [x] wtx prune should also delete the branches, not just the worktrees (--force for deleting unmerged/uncommitted changes). but only the branches starting with the prefix.
 - [ ] fix the current fact that no env vars are read/venv isn't entered
 - [ ] run a refactor/tightening/making concise of wtx
 
