@@ -1,195 +1,206 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Comprehensive wtx test script: flow, inter-agent comms, isolation, recursion
-# All test data is under testing-data/, nothing outside is touched.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$SCRIPT_DIR/testing-data/test-repo"
-WORKTREES="$SCRIPT_DIR/testing-data"
-REPO_NAME="test-repo"
+CONTAINER_ROOT="$SCRIPT_DIR/testing-data"
 WTX_SCRIPT="$SCRIPT_DIR/wtx"
-export WTX_OSA_OPEN=0              # Disable macOS Terminal opening for tests
-export WTX_SESSION_PREFIX="wtx_test"  # Avoid collisions with real sessions
-export WTX_CONTAINER_DEFAULT="$WORKTREES"  # Direct worktrees into testing-data
+REPO_NAME="test-repo"
+WORKTREE_PARENT="$CONTAINER_ROOT"
 
-fail()    { echo -e "\n❌ FAIL: $*"; exit 1; }
-step()    { echo -e "\n👉 $*"; }
-success() { echo -e "\n✅ $*"; }
+export WTX_CONTAINER_DEFAULT="$CONTAINER_ROOT"
+export WTX_MESSAGING_POLICY="all"
 
-# Helpers
-meta_file() { echo "$TEST_ROOT/.git/wtx.meta/$1.env"; }
-session_for() { echo "${WTX_SESSION_PREFIX}:$1"; }
-tmux_safe_session() { echo "${1//:/_}"; }
-tmux_has() { tmux has-session -t "$(tmux_safe_session "$1")" >/dev/null 2>&1; }
-assert_contains() { local file="$1" pat="$2"; grep -E "$pat" "$file" >/dev/null || fail "pattern '$pat' not found in $file"; }
-wait_for_file() {
-  local file="$1" attempts="${2:-20}" delay="${3:-0.1}"
-  local i
-  for ((i=0; i<attempts; i++)); do
-    [[ -f "$file" ]] && return 0
-    sleep "$delay"
-  done
-  return 1
-}
-
-cleanup() {
-  step "Cleaning up test repo and worktrees"
-  rm -rf "$TEST_ROOT"
-  if [ -d "$WORKTREES" ]; then
-    # Remove all sNNN-* worktrees we might have created
-    find "$WORKTREES" -maxdepth 1 -type d -name 's*' -exec rm -rf {} +
-    rm -rf "$WORKTREES/${REPO_NAME}.worktrees"
+fail(){ echo "\n❌ FAIL: $*"; exit 1; }
+step(){ echo "\n👉 $*"; }
+success(){ echo "\n✅ $*"; }
+wait_for_file(){ local path="$1" timeout="${2:-30}"; for ((i=0;i<timeout;i++)); do [[ -f "$path" ]] && return 0; sleep 1; done; return 1; }
+session_name(){ local branch="$1"; local combined="${REPO_NAME}-${branch}"; echo "${combined//[^A-Za-z0-9._-]/-}"; }
+tmux_has(){ tmux has-session -t "$1" >/dev/null 2>&1; }
+wait_for_session(){ local name="$1"; for ((i=0;i<40;i++)); do tmux_has "$name" && return 0; sleep 0.2; done; return 1; }
+kill_test_sessions(){
+  local sessions
+  sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+  if [[ -n "$sessions" ]]; then
+    while read -r name; do
+      [[ "$name" == ${REPO_NAME}-* ]] && tmux kill-session -t "$name" >/dev/null 2>&1 || true
+    done <<<"$sessions"
   fi
 }
+
+cleanup(){ step "Cleaning test artifacts"; kill_test_sessions; rm -rf "$TEST_ROOT" "$WORKTREE_PARENT"; }
 trap cleanup EXIT
 
 cleanup
 
-step "Creating sandbox git repo at $TEST_ROOT"
+step "Initialize sandbox repository"
 mkdir -p "$TEST_ROOT"
 cd "$TEST_ROOT"
-git init -b main
-git config user.email "test@example.com"
+git init -b main >/dev/null
+git config user.email "tester@example.com"
 git config user.name "WTX Tester"
-echo "# Test" > README.md
+echo "# Sandbox" > README.md
 git add README.md
-git commit -m "Initialize sandbox repo for wtx tests: add README for clarity"
+git commit -m "Initial sandbox commit for wtx tests" >/dev/null
+mkdir -p .venv/bin
+touch .venv/bin/activate
 
-# Sanity: default parent should be current branch (main here)
-step "Default parent = current branch (on main)"
-"$WTX_SCRIPT" create -d "default-main" --no-open | tee create_default_main.out
-DEF_MAIN_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_default_main.out)
-[ -n "${DEF_MAIN_BRANCH:-}" ] || fail "Could not parse default-main branch from wtx output"
-[ -f "$(meta_file "$DEF_MAIN_BRANCH")" ] || fail "No meta for default-main"
-assert_contains "$(meta_file "$DEF_MAIN_BRANCH")" "^PARENT_BRANCH=main$"
-"$WTX_SCRIPT" remove --force "$DEF_MAIN_BRANCH" || fail "remove default-main failed"
+# ---------------------------------------------------------------------------
+# Default parent selection (main)
+# ---------------------------------------------------------------------------
+step "Default parent is the active branch (main)"
+DEFAULT_MAIN_OUT="$($WTX_SCRIPT create)"
+echo "$DEFAULT_MAIN_OUT" | grep -q "created branch=" || fail "create output missing expected prefix"
+DEFAULT_MAIN_BRANCH="$(echo "$DEFAULT_MAIN_OUT" | sed -n 's/^created branch=\([^ ]*\) .*/\1/p')"
+DEFAULT_MAIN_WT="$(echo "$DEFAULT_MAIN_OUT" | sed -n 's/.* worktree=\([^ ]*\) .*/\1/p')"
+[[ -d "$DEFAULT_MAIN_WT" ]] || fail "main default worktree missing"
+git config --get "branch.$DEFAULT_MAIN_BRANCH.description" | grep -q "parent=main" || fail "main default branch missing parent description"
+DEFAULT_MAIN_SESSION="$(session_name "$DEFAULT_MAIN_BRANCH")"
+wait_for_session "$DEFAULT_MAIN_SESSION" || fail "main default tmux session missing"
+tmux kill-session -t "$DEFAULT_MAIN_SESSION" >/dev/null 2>&1 || true
+git worktree remove -f "$DEFAULT_MAIN_WT" >/dev/null
+git branch -D "$DEFAULT_MAIN_BRANCH" >/dev/null 2>&1 || true
 
-# 1) Create parent
-desc_parent="alpha"
-step "Creating parent worktree: wtx create -d '$desc_parent' --no-open"
-"$WTX_SCRIPT" create -d "$desc_parent" --no-open | tee create_parent.out
-PARENT_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_parent.out)
-[ -n "${PARENT_BRANCH:-}" ] || fail "Could not parse parent branch from wtx output"
-PARENT_WT="$WORKTREES/$PARENT_BRANCH"
-[ -d "$PARENT_WT" ] || fail "Parent worktree not created"
+# ---------------------------------------------------------------------------
+# Default parent selection (non-main)
+# ---------------------------------------------------------------------------
+step "Default parent follows current branch (dev)"
+git checkout -b dev >/dev/null
+DEFAULT_DEV_OUT="$($WTX_SCRIPT create)"
+DEFAULT_DEV_BRANCH="$(echo "$DEFAULT_DEV_OUT" | sed -n 's/^created branch=\([^ ]*\) .*/\1/p')"
+DEFAULT_DEV_WT="$(echo "$DEFAULT_DEV_OUT" | sed -n 's/.* worktree=\([^ ]*\) .*/\1/p')"
+[[ -d "$DEFAULT_DEV_WT" ]] || fail "dev default worktree missing"
+git config --get "branch.$DEFAULT_DEV_BRANCH.description" | grep -q "parent=dev" || fail "dev default branch missing parent description"
+DEFAULT_DEV_SESSION="$(session_name "$DEFAULT_DEV_BRANCH")"
+wait_for_session "$DEFAULT_DEV_SESSION" || fail "dev default tmux session missing"
+tmux kill-session -t "$DEFAULT_DEV_SESSION" >/dev/null 2>&1 || true
+git worktree remove -f "$DEFAULT_DEV_WT" >/dev/null
+git branch -D "$DEFAULT_DEV_BRANCH" >/dev/null 2>&1 || true
+git checkout main >/dev/null
+git branch -D dev >/dev/null 2>&1 || true
 
-step "Verifying metadata for parent"
-[ -f "$(meta_file "$PARENT_BRANCH")" ] || fail "No meta file for parent"
-assert_contains "$(meta_file "$PARENT_BRANCH")" "^BRANCH=$PARENT_BRANCH$"
-assert_contains "$(meta_file "$PARENT_BRANCH")" "^PARENT_BRANCH=main$"
+# ---------------------------------------------------------------------------
+# Create multi-generation hierarchy
+# ---------------------------------------------------------------------------
+declare PARENT_BRANCH="" PARENT_WT="" PARENT_SESSION=""
+declare CHILD_BRANCH="" CHILD_WT="" CHILD_SESSION=""
+declare GRAND_BRANCH="" GRAND_WT="" GRAND_SESSION=""
 
-step "wtx list shows parent worktree"
-"$WTX_SCRIPT" list | grep -q "${PARENT_WT}" || fail "Parent worktree not listed"
+step "Create parent agent worktree with startup hook"
+PARENT_OUT="$($WTX_SCRIPT create parent-agent -c "printf 'parent-ready\n' >> ready.log")"
+PARENT_BRANCH="$(echo "$PARENT_OUT" | sed -n 's/^created branch=\([^ ]*\) .*/\1/p')"
+PARENT_WT="$(echo "$PARENT_OUT" | sed -n 's/.* worktree=\([^ ]*\) .*/\1/p')"
+[[ -d "$PARENT_WT" ]] || fail "Parent worktree missing"
+[[ -L "$PARENT_WT/.venv" ]] || fail "Parent missing .venv symlink"
+[[ "$(readlink "$PARENT_WT/.venv")" == "$TEST_ROOT/.venv" ]] || fail ".venv symlink target incorrect"
+git config --get "branch.$PARENT_BRANCH.description" | grep -q "parent=main" || fail "Parent branch missing parent=main description"
+PARENT_SESSION="$(session_name "$PARENT_BRANCH")"
+wait_for_session "$PARENT_SESSION" || fail "Parent tmux session missing"
+HOOK_PATH=$(git -C "$PARENT_WT" rev-parse --git-path hooks/post-commit)
+[[ -x "$HOOK_PATH" ]] || fail "post-commit hook not installed"
+wait_for_file "$PARENT_WT/ready.log" 10 || fail "Parent startup command did not execute"
 
-step "env-setup inside parent"
+step "Create child agent using parent worktree"
 cd "$PARENT_WT"
-"$WTX_SCRIPT" env-setup | grep -q "env ready: BRANCH=$PARENT_BRANCH PARENT_BRANCH=main" || fail "env-setup output mismatch in parent"
+CHILD_OUT="$($WTX_SCRIPT create child-agent)"
+CHILD_BRANCH="$(echo "$CHILD_OUT" | sed -n 's/^created branch=\([^ ]*\) .*/\1/p')"
+CHILD_WT="$(echo "$CHILD_OUT" | sed -n 's/.* worktree=\([^ ]*\) .*/\1/p')"
+[[ -d "$CHILD_WT" ]] || fail "Child worktree missing"
+git config --get "branch.$CHILD_BRANCH.description" | grep -q "parent=$PARENT_BRANCH" || fail "Child missing parent description"
+[[ -L "$CHILD_WT/.venv" ]] || fail "Child missing .venv symlink"
+CHILD_SESSION="$(session_name "$CHILD_BRANCH")"
+wait_for_session "$CHILD_SESSION" || fail "Child tmux session missing"
 
-# Sanity: switch repo to a non-main branch and ensure default parent follows
-cd "$TEST_ROOT"
-git checkout -b dev
-echo "dev file" > dev.txt
-git add dev.txt
-git commit -m "Create dev branch with a file to verify default parent behavior on non-main"
-step "Default parent = current branch (on dev)"
-"$WTX_SCRIPT" create -d "default-dev" --no-open | tee create_default_dev.out
-DEF_DEV_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_default_dev.out)
-[ -n "${DEF_DEV_BRANCH:-}" ] || fail "Could not parse default-dev branch from wtx output"
-DEF_DEV_META="$(meta_file "$DEF_DEV_BRANCH")"
-[ -f "$DEF_DEV_META" ] || fail "No meta for default-dev"
-assert_contains "$DEF_DEV_META" "^PARENT_BRANCH=dev$"
-DEF_DEV_WT="$WORKTREES/$DEF_DEV_BRANCH"
-[ -d "$DEF_DEV_WT" ] || fail "default-dev worktree not created"
-"$WTX_SCRIPT" remove --force "$DEF_DEV_BRANCH" || fail "remove default-dev failed"
-
-# Return to the parent worktree before testing open/session behavior
-cd "$PARENT_WT"
-
-step "open parent session and verify tmux session exists"
-"$WTX_SCRIPT" open || fail "open failed for parent"
-PARENT_SESSION="$(session_for "$PARENT_BRANCH")"
-tmux_has "$PARENT_SESSION" || fail "tmux session not present for parent: $PARENT_SESSION"
-
-# 2) Create child and grandchild
-cd "$TEST_ROOT"
-desc_child="beta"
-step "Creating child of $PARENT_BRANCH"
-"$WTX_SCRIPT" create -p "$PARENT_BRANCH" -d "$desc_child" --no-open | tee create_child.out
-CHILD_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_child.out)
-[ -n "${CHILD_BRANCH:-}" ] || fail "Could not parse child branch from wtx output"
-CHILD_WT="$WORKTREES/$CHILD_BRANCH"
-[ -d "$CHILD_WT" ] || fail "Child worktree not created"
-
-desc_grand="gamma"
-step "Creating grandchild of $CHILD_BRANCH"
-"$WTX_SCRIPT" create -p "$CHILD_BRANCH" -d "$desc_grand" --no-open | tee create_grand.out
-GRAND_BRANCH=$(sed -n 's/^OK: branch=\([^ ]*\).*/\1/p' create_grand.out)
-[ -n "${GRAND_BRANCH:-}" ] || fail "Could not parse grandchild branch from wtx output"
-GRAND_WT="$WORKTREES/$GRAND_BRANCH"
-[ -d "$GRAND_WT" ] || fail "Grandchild worktree not created"
-
-step "env-setup in child and grandchild uses correct PARENT_BRANCH"
-cd "$CHILD_WT" && "$WTX_SCRIPT" env-setup | grep -q "PARENT_BRANCH=$PARENT_BRANCH" || fail "child PARENT_BRANCH not set correctly"
-cd "$GRAND_WT" && "$WTX_SCRIPT" env-setup | grep -q "PARENT_BRANCH=$CHILD_BRANCH" || fail "grandchild PARENT_BRANCH not set correctly"
-
-# 3) Inter-agent communication via tmux
-PARENT_SESSION="$(session_for "$PARENT_BRANCH")"
-CHILD_SESSION="$(session_for "$CHILD_BRANCH")"
-GRAND_SESSION="$(session_for "$GRAND_BRANCH")"
-
-step "Ensure sessions exist for all branches"
-for s in "$PARENT_SESSION" "$CHILD_SESSION" "$GRAND_SESSION"; do tmux_has "$s" || fail "missing tmux session $s"; done
-
-step "Child -> Parent via notify_parents --keys (writes to parent's log)"
+step "Create grandchild agent from child worktree"
 cd "$CHILD_WT"
-"$WTX_SCRIPT" notify_parents --keys "printf 'child->parent\n' >> wtx_msgs.log" || fail "notify_parents from child failed"
-wait_for_file "$PARENT_WT/wtx_msgs.log" 30 0.1 || fail "Parent log not created by child notification"
-grep -q "child->parent" "$PARENT_WT/wtx_msgs.log" || fail "Parent did not receive child's message"
+GRAND_OUT="$($WTX_SCRIPT create grand-agent)"
+GRAND_BRANCH="$(echo "$GRAND_OUT" | sed -n 's/^created branch=\([^ ]*\) .*/\1/p')"
+GRAND_WT="$(echo "$GRAND_OUT" | sed -n 's/.* worktree=\([^ ]*\) .*/\1/p')"
+[[ -d "$GRAND_WT" ]] || fail "Grandchild worktree missing"
+git config --get "branch.$GRAND_BRANCH.description" | grep -q "parent=$CHILD_BRANCH" || fail "Grandchild missing parent description"
+GRAND_SESSION="$(session_name "$GRAND_BRANCH")"
+wait_for_session "$GRAND_SESSION" || fail "Grandchild tmux session missing"
 
-step "Parent -> Child via notify_children --keys (writes to child's log)"
+step "wtx list shows hierarchy"
+LIST_OUTPUT="$($WTX_SCRIPT list)"
+echo "$LIST_OUTPUT" | grep -q "BRANCH" || fail "list header missing"
+echo "$LIST_OUTPUT" | grep -q "$PARENT_BRANCH" || fail "Parent not listed"
+echo "$LIST_OUTPUT" | grep -q "$CHILD_BRANCH" || fail "Child not listed"
+echo "$LIST_OUTPUT" | grep -q "$GRAND_BRANCH" || fail "Grandchild not listed"
+echo "$LIST_OUTPUT" | grep -Eq "${CHILD_BRANCH}[[:space:]]+${PARENT_BRANCH}" || fail "Child listing missing parent"
+echo "$LIST_OUTPUT" | grep -Eq "${GRAND_BRANCH}[[:space:]]+${CHILD_BRANCH}" || fail "Grandchild listing missing parent"
+
+# ---------------------------------------------------------------------------
+# Messaging propagation across generations
+# ---------------------------------------------------------------------------
+step "Commit in parent notifies child"
 cd "$PARENT_WT"
-"$WTX_SCRIPT" notify_children --keys "printf 'parent->child\n' >> wtx_msgs.log" || fail "notify_children from parent failed"
-wait_for_file "$CHILD_WT/wtx_msgs.log" 30 0.1 || fail "Child log not created by parent notification"
-grep -q "parent->child" "$CHILD_WT/wtx_msgs.log" || fail "Child did not receive parent's message"
+echo "parent-update" > parent.log
+git add parent.log
+git commit -m "Parent: seed child" >/dev/null
+parent_hash=$(git rev-parse --short HEAD)
+sleep 1
+CHILD_CAPTURE="$(tmux capture-pane -t "$CHILD_SESSION" -p)"
+echo "$CHILD_CAPTURE" | grep -q "# \[wtx from ${PARENT_BRANCH}\]:" || fail "Child session missing parent message"
+echo "$CHILD_CAPTURE" | grep -q "git merge ${parent_hash}" || fail "Child message missing merge hint"
 
-step "Child -> Grandchild via notify_children --keys"
+step "Commit in child notifies parent and grandchild"
 cd "$CHILD_WT"
-"$WTX_SCRIPT" notify_children --keys "printf 'child->grand\n' >> wtx_msgs.log" || fail "notify_children from child failed"
-wait_for_file "$GRAND_WT/wtx_msgs.log" 30 0.1 || fail "Grandchild log not created by child notification"
-grep -q "child->grand" "$GRAND_WT/wtx_msgs.log" || fail "Grandchild did not receive child's message"
+echo "child-only" > child.txt
+git add child.txt
+git commit -m "Child: broadcast to parent and grandchild" >/dev/null
+child_hash=$(git rev-parse --short HEAD)
+sleep 1
+PARENT_CAPTURE="$(tmux capture-pane -t "$PARENT_SESSION" -p)"
+echo "$PARENT_CAPTURE" | grep -q "# \[wtx from ${CHILD_BRANCH}\]:" || fail "Parent session missing child message"
+echo "$PARENT_CAPTURE" | grep -q "git merge ${child_hash}" || fail "Parent message missing merge hint"
+GRAND_CAPTURE="$(tmux capture-pane -t "$GRAND_SESSION" -p)"
+echo "$GRAND_CAPTURE" | grep -q "# \[wtx from ${CHILD_BRANCH}\]:" || fail "Grandchild session missing child message"
 
-step "Grandchild notify_children reports no targets"
+step "Commit in grandchild notifies parent branch"
 cd "$GRAND_WT"
-"$WTX_SCRIPT" notify_children "noop" | grep -q "no target sessions found" || fail "Expected 'no target sessions found' for grandchild"
+echo "grand-only" > grand.txt
+git add grand.txt
+git commit -m "Grandchild: notify parent" >/dev/null
+grand_hash=$(git rev-parse --short HEAD)
+sleep 1
+CHILD_CAPTURE_AFTER="$(tmux capture-pane -t "$CHILD_SESSION" -p)"
+echo "$CHILD_CAPTURE_AFTER" | grep -q "# \[wtx from ${GRAND_BRANCH}\]:" || fail "Child session missing grandchild message"
+echo "$CHILD_CAPTURE_AFTER" | grep -q "git merge ${grand_hash}" || fail "Grandchild message missing merge hint"
 
-# 4) Isolation between worktrees
-step "Isolation: create file only in child; verify not in parent"
-cd "$CHILD_WT"
-echo "child only" > only_in_child.txt
-git add only_in_child.txt
-git commit -m "Child branch: add only_in_child.txt to verify isolation across worktrees"
-[ ! -f "$PARENT_WT/only_in_child.txt" ] || fail "Isolation breach: file appeared in parent"
+step "Explicit message with no children reports absence"
+NO_TARGET_MSG="$(WTX_MESSAGING_POLICY=children "$WTX_SCRIPT" message 2>&1 || true)"
+echo "$NO_TARGET_MSG" | grep -q "no messaging targets" || fail "Expected no target warning"
 
-step "Isolation: commit in child is not present in parent"
+# ---------------------------------------------------------------------------
+# Isolation between worktrees
+# ---------------------------------------------------------------------------
+step "Isolation: child artifact is absent from parent"
 cd "$PARENT_WT"
-! git ls-files --error-unmatch only_in_child.txt >/dev/null 2>&1 || fail "Parent sees child's tracked file unexpectedly"
+[[ ! -f child.txt ]] || fail "Child file leaked into parent"
+if git ls-files --error-unmatch child.txt >/dev/null 2>&1; then
+  fail "Parent unexpectedly tracks child file"
+fi
 
-# 5) Remove in reverse order and verify cleanup
+# ---------------------------------------------------------------------------
+# Cleanup via git + prune
+# ---------------------------------------------------------------------------
+step "Manual worktree removal followed by wtx prune"
 cd "$TEST_ROOT"
-step "Remove grandchild worktree"
-"$WTX_SCRIPT" remove --force "$GRAND_BRANCH" || fail "remove grandchild failed"
-[ ! -d "$GRAND_WT" ] || fail "Grandchild worktree not removed"
-[ ! -f "$(meta_file "$GRAND_BRANCH")" ] || fail "Grandchild meta file still present"
+git worktree remove -f "$GRAND_WT" >/dev/null
+git branch -D "$GRAND_BRANCH" >/dev/null 2>&1 || true
+git worktree remove -f "$CHILD_WT" >/dev/null
+git branch -D "$CHILD_BRANCH" >/dev/null 2>&1 || true
+git worktree remove -f "$PARENT_WT" >/dev/null
+git branch -D "$PARENT_BRANCH" >/dev/null 2>&1 || true
+mkdir -p "$WORKTREE_PARENT/stale"
+"$WTX_SCRIPT" prune >/dev/null
+[[ ! -d "$GRAND_WT" ]] || fail "Grandchild worktree directory still present"
+[[ ! -d "$CHILD_WT" ]] || fail "Child worktree directory still present"
+[[ ! -d "$PARENT_WT" ]] || fail "Parent worktree directory still present"
+[[ ! -d "$WORKTREE_PARENT/stale" ]] || fail "Prune failed to remove stale directory"
+tmux_has "$GRAND_SESSION" && fail "Grandchild tmux session survived prune"
+tmux_has "$CHILD_SESSION" && fail "Child tmux session survived prune"
+tmux_has "$PARENT_SESSION" && fail "Parent tmux session survived prune"
 
-step "Remove child worktree"
-"$WTX_SCRIPT" remove --force "$CHILD_BRANCH" || fail "remove child failed"
-[ ! -d "$CHILD_WT" ] || fail "Child worktree not removed"
-[ ! -f "$(meta_file "$CHILD_BRANCH")" ] || fail "Child meta file still present"
-
-step "Remove parent worktree"
-"$WTX_SCRIPT" remove --force "$PARENT_BRANCH" || fail "remove parent failed"
-[ ! -d "$PARENT_WT" ] || fail "Parent worktree not removed"
-[ ! -f "$(meta_file "$PARENT_BRANCH")" ] || fail "Parent meta file still present"
-
-success "All wtx tests passed: flow, inter-agent communication, isolation, recursion"
+success "wtx workflow tests completed"

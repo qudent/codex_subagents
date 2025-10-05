@@ -1,400 +1,382 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# -------- Config (override via env) -----------------------------------------
-WTX_CONTAINER_DEFAULT="${WTX_CONTAINER_DEFAULT:-}"       # if empty, auto: <repo_parent>/<repo>.worktrees
-WTX_SESSION_PREFIX="${WTX_SESSION_PREFIX:-wtx}"   # tmux session prefix
-WTX_OSA_OPEN="${WTX_OSA_OPEN:-1}" # on macOS, open Terminal via osascript
-WTX_SHORT_PREFIX="${WTX_SHORT_PREFIX:-s}"         # counter prefix: s001, s002...
-WTX_SCRIPT="${WTX_SCRIPT:-${BASH_SOURCE[0]}}"
+# wtx — minimal worktree + tmux orchestrator for coding agents
 
-# -------- Helpers -----------------------------------------------------------
-die(){ echo "error: $*" >&2; exit 1; }
-is_macos(){ [[ "$(uname -s)" == "Darwin" ]]; }
+# -----------------------------------------------------------------------------
+# Configuration (env overrides)
+# -----------------------------------------------------------------------------
+WTX_CONTAINER_DEFAULT="${WTX_CONTAINER_DEFAULT:-}"   # overrides worktree parent dir
+WTX_MESSAGING_POLICY="${WTX_MESSAGING_POLICY:-all}"  # parent,children,all
+
+# Absolute path to this script for use in git hooks
+WTX_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+die(){ echo "wtx: $*" >&2; exit 1; }
 has(){ command -v "$1" >/dev/null 2>&1; }
-git_toplevel(){ git rev-parse --show-toplevel; }
-git_dir(){ git rev-parse --git-common-dir; }
-safe_slug(){ # letters, digits, dash only
-  echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+ensure_tools(){ has git || die "git not found"; has tmux || die "tmux not found"; }
+ensure_repo(){ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "run inside a git repo"; }
+repo_root(){ git rev-parse --show-toplevel; }
+repo_name(){
+  local common root
+  common=$(git rev-parse --git-common-dir)
+  root=$(cd "$common/.." && pwd)
+  basename "$root"
 }
-counter_next(){
-  local repo_git="$1"
-  local f="$repo_git/wtx.counter"
+repo_git(){ git rev-parse --git-path .; }
+container_dir(){
+  local root="$(repo_root)"
+  if [[ -n "$WTX_CONTAINER_DEFAULT" ]]; then
+    printf '%s\n' "$WTX_CONTAINER_DEFAULT"
+  else
+    local parent
+    parent="$(cd "$root/.." && pwd)"
+    printf '%s\n' "$parent/$(repo_name).worktrees"
+  fi
+}
+ensure_container(){ local dir; dir="$(container_dir)"; mkdir -p "$dir"; }
+safe_slug(){
+  local s="$1"
+  s="${s// /-}"
+  s="${s//_/-}"
+  s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+  printf '%s\n' "$s" | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+}
+counter_file(){ git rev-parse --git-path wtx.counter; }
+next_counter(){
+  local file; file="$(counter_file)"
   local n=1
-  if [[ -f "$f" ]]; then
-    n=$(<"$f")
+  if [[ -f "$file" ]]; then
+    n=$(<"$file")
     n=$((n+1))
   fi
-  printf "%03d" "$n" >"$f"
-  printf "%03d" "$n"
+  printf '%03d' "$n" >"$file"
+  printf '%03d' "$n"
 }
-meta_dir(){ echo "$(git_dir)/wtx.meta"; }
-meta_file_for(){ # $1 = branch
-  local mdir; mdir="$(meta_dir)"; mkdir -p "$mdir"
-  echo "$mdir/${1}.env"
+session_name_for(){
+  local branch="$1"
+  local name
+  name="$(repo_name)-$branch"
+  name="${name//[^A-Za-z0-9._-]/-}"
+  printf '%s\n' "$name"
 }
-write_meta(){
-  local file="$1"; shift
-  {
-    printf 'BRANCH=%q\n' "$BRANCH"
-    printf 'PARENT_BRANCH=%q\n' "$PARENT_BRANCH"
-    printf 'WORKTREE=%q\n' "$WORKTREE_DIR"
-    printf 'SESSION=%q\n' "$SESSION"
-    printf 'CREATED_AT=%q\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  } >"$file"
+tmux_has(){ tmux has-session -t "$1" >/dev/null 2>&1; }
+parents_desc_key(){ printf 'branch.%s.description\n' "$1"; }
+set_branch_description(){
+  local branch="$1" parent="$2"
+  local desc="parent=$parent"
+  git config "$(parents_desc_key "$branch")" "$desc"
 }
-read_meta(){
-  # sources metadata env for branch $1 if exists
-  local f; f="$(meta_file_for "$1")"
-  [[ -f "$f" ]] && # shellcheck disable=SC1090
-  source "$f"
+get_branch_parent(){
+  local branch="$1" desc
+  desc=$(git config --get "$(parents_desc_key "$branch")" 2>/dev/null || true)
+  [[ -z "$desc" ]] && return 1
+  desc="${desc#parent=}"
+  printf '%s\n' "$desc"
 }
-
-all_child_branches_of(){
-  local parent="$1"
-  local f
-  shopt -s nullglob
-  local files=("$(meta_dir)"/*.env)
-  shopt -u nullglob
-  for f in "${files[@]}"; do
-    [[ -f "$f" ]] || continue
-    # shellcheck disable=SC1090
-    source "$f"
-    if [[ "${PARENT_BRANCH:-}" == "$parent" ]]; then
-      echo "${BRANCH}"
-    fi
-  done
+children_of(){
+  local parent="$1" br
+  while IFS= read -r br; do
+    local p
+    p=$(get_branch_parent "$br" 2>/dev/null || true)
+    [[ "$p" == "$parent" ]] && printf '%s\n' "$br"
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
 }
 
-ensure_tools(){
-  has git || die "git not found"
-  has tmux || die "tmux not found"
-}
+worktree_path_for(){ printf '%s/%s\n' "$(container_dir)" "$1"; }
+post_commit_hook_path(){ git -C "$1" rev-parse --git-path hooks/post-commit; }
 
-ensure_repo(){
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "run inside a git repo/worktree"
-}
-
-container_dir(){
-  local repo_root="$1"
-  if [[ -n "$WTX_CONTAINER_DEFAULT" ]]; then
-    echo "$WTX_CONTAINER_DEFAULT"
-  else
-    local parent repo
-    parent="$(cd "$repo_root/.."; pwd)"
-    repo="$(basename "$repo_root")"
-    echo "$parent/${repo}.worktrees"
+link_shared_environment(){
+  local root="$(repo_root)" wt="$1"
+  if [[ -d "$root/.venv" && ! -e "$wt/.venv" ]]; then
+    ln -s "$root/.venv" "$wt/.venv"
+  fi
+  if [[ -f "$root/.env" && ! -e "$wt/.env" ]]; then
+    ln -s "$root/.env" "$wt/.env"
   fi
 }
 
-ensure_branch_free(){
-  local br="$1"
-  if git worktree list --porcelain | grep -q "branch $br$"; then
-    die "branch '$br' is already checked out in another worktree"
+start_tmux_session(){
+  local branch="$1" wt="$2";
+  local session; session="$(session_name_for "$branch")"
+  if ! tmux_has "$session"; then
+    local bootstrap
+    bootstrap="cd \"$wt\"; "
+    bootstrap+="if [ -d .venv/bin ]; then source .venv/bin/activate; fi; "
+    bootstrap+="if command -v pnpm >/dev/null 2>&1 && { [ -f pnpm-lock.yaml ] || [ -f package.json ]; }; then pnpm install; fi; "
+    bootstrap+="exec \$SHELL -l"
+    tmux new-session -d -s "$session" -c "$wt" "bash -lc '$bootstrap'"
   fi
+  tmux set-environment -t "$session" WTX_BRANCH "$branch" || true
+  tmux set-environment -t "$session" WTX_PARENT "$(get_branch_parent "$branch" 2>/dev/null || echo '')" || true
 }
 
-link_if_absent(){
-  local src="$1" dst="$2"
-  [[ -e "$dst" ]] && return 0
-  [[ -e "$src" ]] || return 0
-  ln -s "$src" "$dst"
+send_startup_command(){
+  local branch="$1" cmd="$2"
+  [[ -z "$cmd" ]] && return 0
+  local session; session="$(session_name_for "$branch")"
+  tmux_has "$session" || return 0
+  tmux send-keys -t "$session" -- "$cmd" Enter
 }
 
-dotenv_export(){
-  local file="$1"
-  [[ -f "$file" ]] || return 0
-  # Export simple KEY=VALUE lines (no spaces, ignore comments)
-  # shellcheck disable=SC2046
-  export $(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" | sed -E 's/[[:space:]]+#.*$//' | cut -d= -f1)
-  # Now actually source to pick up the values (including quoted)
-  set -a; source "$file"; set +a
+install_post_commit_hook(){
+  local wt="$1"
+  local hook; hook="$(post_commit_hook_path "$wt")"
+  mkdir -p "$(dirname "$hook")"
+  cat >"$hook" <<HOOK
+#!/bin/sh
+"$WTX_SCRIPT_PATH" message
+HOOK
+  chmod +x "$hook"
 }
 
-npm_install_if_needed(){
-  local dir="$1"
-  if [[ -f "$dir/package-lock.json" ]]; then
-    (cd "$dir" && (npm ci || npm install))
-  elif [[ -f "$dir/package.json" ]]; then
-    (cd "$dir" && npm install)
-  fi
+print_create_result(){
+  local branch="$1" parent="$2" path="$3" session="$4"
+  printf 'created branch=%s parent=%s worktree=%s session=%s\n' "$branch" "$parent" "$path" "$session"
 }
 
-tmux_safe_session_name(){
-  local name="$1"
-  # tmux uses ':' to delimit session/window; replace with '_' to create a valid tmux name
-  echo "${name//:/_}"
-}
-
-tmux_start_session(){
-  local session="$1" dir="$2"
-  local tmux_name
-  tmux_name="$(tmux_safe_session_name "$session")"
-  local first_cmd="bash -lc 'cd \"$dir\"; \"$WTX_SCRIPT\" env-setup; exec \$SHELL -l -i'"
-  if tmux has-session -t "$tmux_name" 2>/dev/null; then
+resolve_parent_branch(){
+  local specified="$1"
+  if [[ -n "$specified" ]]; then
+    printf '%s\n' "$specified"
     return 0
   fi
-  tmux new-session -d -s "$tmux_name" -c "$dir" "$first_cmd"
-  tmux set-environment -t "$tmux_name" PARENT_BRANCH "$PARENT_BRANCH"
-  tmux set-environment -t "$tmux_name" BRANCH "$BRANCH"
-}
-
-osascript_open_terminal_attach(){
-  local session="$1"
-  ! is_macos && return 0
-  [[ "${WTX_OSA_OPEN}" == "1" ]] || return 0
-  local tmux_name
-  tmux_name="$(tmux_safe_session_name "$session")"
-  /usr/bin/osascript <<APPLESCRIPT
-tell application "Terminal"
-  activate
-  do script "tmux attach -t ${tmux_name}"
-end tell
-APPLESCRIPT
-}
-
-# -------- Commands ----------------------------------------------------------
-
-cmd_create(){
-  ensure_tools; ensure_repo
-  local repo_root; repo_root="$(git_toplevel)"
-  local repo_git; repo_git="$(git_dir)"
-  # Default parent: current branch if available, else HEAD (detached HEAD case)
-  local cur
-  cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-  local parent
-  local base_ref
-  if [[ -n "$cur" && "$cur" != "HEAD" ]]; then
-    parent="$cur"
-    base_ref="refs/heads/${parent}"
-  else
-    # Detached HEAD: use the commit SHA as parent name and HEAD as base
-    parent="$(git rev-parse --short HEAD)"
-    base_ref="HEAD"
-  fi
-  local desc=""
-  local open="1"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -p|--parent) parent="${2:-}"; base_ref="refs/heads/${2:-}"; shift 2;;
-      -d|--desc) desc="${2:-}"; shift 2;;
-      --no-open) open="0"; shift;;
-      *) die "unknown option: $1";;
-    esac
-  done
-
-  local cnum; cnum="$(counter_next "$repo_git")"
-  local slug; slug="$(safe_slug "$desc")"
-  local short="${WTX_SHORT_PREFIX}${cnum}"
-  local name="${short}-${parent}"
-  [[ -n "$slug" ]] && name="${name}-${slug}"
-
-  BRANCH="$name"
-  PARENT_BRANCH="$parent"
-
-  ensure_branch_free "$BRANCH"
-
-  local cont; cont="$(container_dir "$repo_root")"
-  mkdir -p "$cont"
-  WORKTREE_DIR="$cont/$BRANCH"
-
-  echo ">> creating worktree: $WORKTREE_DIR for branch $BRANCH (parent: $PARENT_BRANCH)"
-  # Always branch from local refs; no remote usage
-  git worktree add -B "$BRANCH" "$WORKTREE_DIR" "$base_ref"
-
-  # encode parent in branch name (already done) and store metadata
-  SESSION="${WTX_SESSION_PREFIX}:${BRANCH}"
-  write_meta "$(meta_file_for "$BRANCH")"
-
-  # Prepare env files
-  link_if_absent "$repo_root/.venv" "$WORKTREE_DIR/.venv"
-  link_if_absent "$repo_root/.env"  "$WORKTREE_DIR/.env"
-
-  # Boot tmux and mac terminal
-  tmux_start_session "$SESSION" "$WORKTREE_DIR"
-  [[ "$open" == "1" ]] && osascript_open_terminal_attach "$SESSION"
-
-  echo "OK: branch=$BRANCH worktree=$WORKTREE_DIR session=$SESSION"
-}
-
-cmd_env_setup(){
-  ensure_repo
-  local repo_root; repo_root="$(git_toplevel)"
-  local wd; wd="$(pwd)"
-  # If run inside a non-primary worktree, BRANCH is the current
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  # recover parent from metadata if present
-  read_meta "$BRANCH" || true
-  if [[ -z "${PARENT_BRANCH:-}" ]]; then
-    # best-effort guess: parse from our naming convention sNNN-parent-*
-    if [[ "$BRANCH" =~ ^[a-z][0-9]{3}-([A-Za-z0-9._/-]+) ]]; then
-      PARENT_BRANCH="${BASH_REMATCH[1]}"
-    else
-      PARENT_BRANCH="main"
-    fi
-  fi
-  export PARENT_BRANCH
-  # Source Python venv + .env
-  if [[ -f "$wd/.venv/bin/activate" ]]; then
-    # shellcheck disable=SC1091
-    source "$wd/.venv/bin/activate"
-  fi
-  [[ -f "$wd/.env" ]] && dotenv_export "$wd/.env"
-  npm_install_if_needed "$wd"
-  # Let tmux session inherit
-  if has tmux && tmux display-message -p '#{session_name}' >/dev/null 2>&1; then
-    tmux set-environment PARENT_BRANCH "$PARENT_BRANCH" || true
-    tmux set-environment BRANCH "$BRANCH" || true
-  fi
-  echo "env ready: BRANCH=$BRANCH PARENT_BRANCH=$PARENT_BRANCH"
-}
-
-cmd_open(){
-  ensure_tools; ensure_repo
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  read_meta "$BRANCH" || die "no metadata for '$BRANCH' (was it created with wtx?)"
-  tmux_start_session "$SESSION" "$WORKTREE"
-  osascript_open_terminal_attach "$SESSION"
-}
-
-cmd_remove(){
-  ensure_tools; ensure_repo
-  local force="0" branch=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -f|--force) force="1"; shift ;;
-      *) branch="${1:-}"; shift ;;
-    esac
-  done
-  [[ -z "$branch" ]] && die "usage: wtx remove [--force] <branch>"
-  read_meta "$branch" || die "unknown branch '$branch'"
-  echo ">> removing worktree $WORKTREE (branch $branch)"
-  if [[ "$force" == "1" ]]; then
-    git worktree remove -f "$WORKTREE"
-  else
-    git worktree remove "$WORKTREE"
-  fi
-  tmux kill-session -t "$(tmux_safe_session_name "$SESSION")" 2>/dev/null || true
-  rm -f "$(meta_file_for "$branch")"
-  echo "OK"
-}
-
-cmd_notify(){
-  ensure_tools; ensure_repo
-  local mode="$1"; shift || true
-  local keys="0"
-  if [[ "${1:-}" == "--keys" ]]; then keys="1"; shift; fi
-  local msg="${*:-"[wtx] ping"}"
-
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  read_meta "$BRANCH" || true
-
-  local targets=()
-  if [[ "$mode" == "parents" ]]; then
-    if [[ -z "${PARENT_BRANCH:-}" ]]; then die "no PARENT_BRANCH known"; fi
-    local parent_branch="$PARENT_BRANCH"
-    read_meta "$parent_branch" || true  # load parent's session if exists
-    targets+=("$parent_branch")
-  elif [[ "$mode" == "children" ]]; then
-    targets=()
-    while IFS= read -r line; do
-      targets+=("$line")
-    done < <(all_child_branches_of "$BRANCH")
-  else
-    die "usage: wtx notify_parents|notify_children [--keys] [message]"
-  fi
-
-  if [[ "${#targets[@]}" -eq 0 ]]; then
-    echo "no target sessions found"
+  local current
+  current=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  if [[ -n "$current" ]]; then
+    printf '%s\n' "$current"
     return 0
   fi
-
-  for br in "${targets[@]}"; do
-    read_meta "$br" || continue
-    local tmux_name
-    tmux_name="$(tmux_safe_session_name "$SESSION")"
-    if tmux has-session -t "$tmux_name" 2>/dev/null; then
-      tmux display-message -t "$tmux_name" -- "$msg"
-      if [[ "$keys" == "1" ]]; then
-        # send to first pane of first window
-        local pane; pane="$(tmux list-panes -t "$tmux_name" -F '#{pane_id}' | head -n1)"
-        local keys_msg
-        keys_msg="${msg//\\/\\\\}"
-        tmux send-keys -t "$pane" "cd \"$WORKTREE\"" Enter
-        tmux send-keys -t "$pane" "$keys_msg" Enter
-      fi
-      echo "notified $br ($SESSION)"
-    fi
-  done
+  die "cannot determine parent branch (detached HEAD without --parent)"
 }
 
-cmd_list(){
+next_branch_name(){
+  local parent="$1" requested="$2"
+  if [[ -n "$requested" ]]; then
+    printf '%s\n' "$(safe_slug "$requested")"
+    return 0
+  fi
+  local slug="$(safe_slug "$parent")"
+  local num="$(next_counter)"
+  printf '%s-%s\n' "$slug" "$num"
+}
+
+create_branch(){
+  ensure_tools; ensure_repo
+  local parent="" name="" command=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--parent)
+        parent="$2"; shift 2;;
+      -c|--command)
+        command="$2"; shift 2;;
+      --)
+        shift; break;;
+      -*)
+        die "unknown option: $1";;
+      *)
+        if [[ -n "$name" ]]; then die "multiple names provided"; fi
+        name="$1"; shift;;
+    esac
+  done
+  if [[ $# -gt 0 ]]; then
+    if [[ -n "$name" ]]; then die "unexpected extra arguments"; fi
+    name="$1"; shift
+  fi
+
+  parent="$(resolve_parent_branch "$parent")"
+  local branch
+  branch="$(next_branch_name "$parent" "$name")"
+  [[ -n "$branch" ]] || die "branch name empty"
+  [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || die "branch name contains invalid characters"
+  git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null && die "branch '$branch' already exists"
+
+  ensure_container
+  local wt; wt="$(worktree_path_for "$branch")"
+  git worktree add -b "$branch" "$wt" "$parent" >/dev/null
+  set_branch_description "$branch" "$parent"
+  link_shared_environment "$wt"
+  install_post_commit_hook "$wt"
+  start_tmux_session "$branch" "$wt"
+  send_startup_command "$branch" "$command"
+  print_create_result "$branch" "$parent" "$wt" "$(session_name_for "$branch")"
+}
+
+list_worktrees(){
   ensure_repo
-  echo "Worktrees (for this repo):"
+  printf '%-25s %-20s %s\n' "BRANCH" "PARENT" "WORKTREE"
   git worktree list --porcelain | awk '
     /^worktree /{wt=$2}
-    /^branch /{br=$2}
-    /^HEAD /{head=$2}
-    /^$/{
-      printf(" - %-40s  %-25s  %s\n", wt, br, head)
-      wt=br=head=""
-    }'
+    /^branch /{
+      ref=$2
+      short=ref
+      if (ref ~ /^refs\/heads\//) {
+        short=substr(ref,12)
+      }
+    }
+    /^$/ {
+      branch=short
+      ref=""; short=""
+      parent=""
+      cmd="git config --get branch." branch ".description"
+      cmd | getline desc
+      close(cmd)
+      if (desc ~ /^parent=/) {
+        parent=substr(desc,8)
+      }
+      printf("%-25s %-20s %s\n", branch, parent, wt)
+      wt=""
+    }
+  '
+}
+
+policy_tokens(){
+  local policy="$1" token
+  IFS=',' read -r -a tokens <<<"$policy"
+  for token in "${tokens[@]}"; do
+    case "$token" in
+      all) echo parent; echo children; return;;
+      parent|parents) echo parent;;
+      child|children) echo children;;
+    esac
+  done
+}
+
+print_to_session(){
+  local session="$1" payload="$2"
+  tmux send-keys -t "$session" -- "cat <<'WTXMSG'" Enter "$payload" Enter "WTXMSG" Enter
+}
+
+deliver_message(){
+  local branch="$1" target="$2" msg="$3" session
+  session="$(session_name_for "$target")"
+  if tmux_has "$session"; then
+    print_to_session "$session" "$msg"
+  fi
+}
+
+cmd_message(){
+  ensure_tools; ensure_repo
+  local branch
+  branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  [[ -n "$branch" ]] || die "wtx message requires a branch checkout"
+  local parent
+  parent=$(get_branch_parent "$branch" 2>/dev/null || true)
+  local commit hash subject
+  hash=$(git rev-parse --short HEAD)
+  subject=$(git log -1 --pretty=%s 2>/dev/null || echo "(no message)")
+  local msg
+  msg="# [wtx from ${branch}]: new git commit with message: ${subject}. To integrate these changes, run: git merge ${hash}"
+
+  local sent=0 target
+  local policy_targets=()
+  while IFS= read -r target; do policy_targets+=("$target"); done < <(policy_tokens "$WTX_MESSAGING_POLICY")
+  if [[ ${#policy_targets[@]} -eq 0 ]]; then
+    policy_targets=(parent children)
+  fi
+
+  for token in "${policy_targets[@]}"; do
+    case "$token" in
+      parent)
+        if [[ -n "$parent" && "$parent" != "$branch" ]]; then
+          deliver_message "$branch" "$parent" "$msg" && sent=1
+        fi
+        ;;
+      children)
+        while IFS= read -r child; do
+          deliver_message "$branch" "$child" "$msg" && sent=1
+        done < <(children_of "$branch")
+        ;;
+    esac
+  done
+  if [[ "$sent" -eq 0 ]]; then
+    echo "no messaging targets" >&2
+  fi
+}
+
+gc_empty_dirs(){
+  local container="$(container_dir)"
+  [[ -d "$container" ]] || return 0
+  local active="$(mktemp)"
+  local active_branches="$(mktemp)"
+  local active_sessions="$(mktemp)"
+  git worktree list --porcelain | awk '
+    /^worktree /{print $2 > path}
+    /^branch /{
+      ref=$2
+      if (ref ~ /^refs\/heads\//) {
+        ref=substr(ref,12)
+      }
+      print ref > branch
+    }
+  ' path="$active" branch="$active_branches"
+  while IFS= read -r branch; do
+    [[ -n "$branch" ]] || continue
+    session_name_for "$branch" >>"$active_sessions"
+  done <"$active_branches"
+  local dir
+  shopt -s nullglob
+  for dir in "$container"/*; do
+    [[ -d "$dir" ]] || continue
+    if ! grep -Fxq "$(cd "$dir" && pwd)" "$active"; then
+      local branch; branch="$(basename "$dir")"
+      rm -rf "$dir"
+      local session="$(session_name_for "$branch")"
+      tmux kill-session -t "$session" >/dev/null 2>&1 || true
+      printf 'pruned %s\n' "$branch"
+    fi
+  done
+  shopt -u nullglob
+  if tmux list-sessions -F '#{session_name}' >/dev/null 2>&1; then
+    local session_list
+    session_list=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+    if [[ -n "$session_list" ]]; then
+      while IFS= read -r name; do
+        [[ "$name" == $(repo_name)-* ]] || continue
+        if ! grep -Fxq "$name" "$active_sessions"; then
+          tmux kill-session -t "$name" >/dev/null 2>&1 || true
+        fi
+      done <<<"$session_list"
+    fi
+  fi
+  rm -f "$active" "$active_branches" "$active_sessions"
+}
+
+cmd_prune(){
+  ensure_tools; ensure_repo
+  git worktree prune >/dev/null
+  gc_empty_dirs
 }
 
 usage(){
-  cat <<'EOF'
-wtx — worktree↔branch manager with tmux + env bootstrap
+  cat <<'USAGE'
+wtx — minimal agent workflow helper
 
-USAGE
-  wtx create [-p|--parent PARENT] [-d|--desc "words"] [--no-open]
-      Create a new branch & linked worktree under <repo>.worktrees/.
-      Branch name: sNNN-PARENT[-slug], e.g., s003-main-login
-      Starts tmux session and (on macOS) opens Terminal attached.
-
-  wtx env-setup
-      In a worktree, link/switch .venv/.env, export env vars, run npm install if needed.
-      (Automatically run in the tmux session created by `create`.)
-
-  wtx open
-      Open (attach) the tmux session for the current worktree (osascript on macOS).
-
-  wtx remove <branch>
-      Remove the linked worktree and kill its tmux session. Keeps the git branch.
-      Use --force to remove even with untracked/modified files in the worktree.
-
-  wtx notify_parents [--keys] [message]
-  wtx notify_children [--keys] [message]
-      Send a tmux display-message (and optionally keystrokes) to parent/children sessions.
-
+Usage:
+  wtx create [NAME] [-p|--parent BRANCH] [-c|--command "..."]
+  wtx message
   wtx list
-      Show all worktrees in this repo.
+  wtx prune
 
-ENV
-  WTX_SESSION_PREFIX   tmux session prefix (default: wtx)
-  WTX_OSA_OPEN         1 to open macOS Terminal (default 1), 0 to skip
-  WTX_SHORT_PREFIX     counter prefix (default s) → s001, s002...
-  WTX_CONTAINER_DEFAULT override default container directory for worktrees
-
-NOTES
-  - Parent branch is recorded and exported as PARENT_BRANCH.
-  - Metadata lives at: $(git_dir 2>/dev/null || echo "<repo>/.git")/wtx.meta/<branch>.env
-  - Each worktree gets a tmux session named "${WTX_SESSION_PREFIX}:<branch>" (tmux stores it with ':' replaced by '_').
-EOF
+Environment:
+  WTX_CONTAINER_DEFAULT  Override worktree parent directory
+  WTX_MESSAGING_POLICY   Target policy for `wtx message` (parent, children, all)
+USAGE
 }
 
-# -------- Dispatcher --------------------------------------------------------
 main(){
-  local sub="${1:-}"; shift || true
-  case "${sub:-}" in
-    create) cmd_create "$@";;
-    env-setup) cmd_env_setup;;
-    open) cmd_open;;
-    remove) cmd_remove "$@";;
-    notify_parents) cmd_notify parents "$@";;
-    notify_children) cmd_notify children "$@";;
-    list) cmd_list;;
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    create) create_branch "$@";;
+    message) cmd_message;;
+    list) list_worktrees;;
+    prune) cmd_prune;;
     ""|help|-h|--help) usage;;
-    *) die "unknown subcommand: $sub (try: wtx help)";;
+    *) die "unknown subcommand: $cmd";;
   esac
 }
+
 main "$@"
