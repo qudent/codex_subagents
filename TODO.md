@@ -16,6 +16,7 @@
 - [x] wtx prune should also delete the branches, not just the worktrees (--force for deleting unmerged/uncommitted changes). but only the branches starting with the prefix.
 - [ ] fix the current fact that no env vars are read/venv isn't entered/pnpm install is not attempted
 - [ ] when a terminal opens, this should be run and briefly acknowledged, branch and parent name and fact that committing will message according to messaging policy should be acknowledged as well.
+- [ ] verify that wtx cleanup also cleans up branch name, --force deletes it
 - [ ] run a refactor/tightening/making concise of wtx
 
 - [x] fix weird behavior that there shouldn't be recursive worktrees, by always constructing worktree path based on root repository .git directory -- currently recursive wtx worktree doesn't work.
