@@ -11,10 +11,14 @@
 - [x] Implement `wtx message` to notify parent and child sessions automatically.
 - [x] Implement `wtx list` as a wrapper around `git worktree list`.
 - [x] Implement `wtx prune` to remove stale worktrees.
-- [ ] Write a minimal `README.md` outlining the agent workflow (`wtx create`, commit triggers `wtx message`, exit tmux, `wtx prune`) and documenting `wtx list`.
+- [x] Write a minimal `README.md` outlining the agent workflow (`wtx create`, commit triggers `wtx message`, exit tmux, `wtx prune`) and documenting `wtx list`.
+- [ ] in the help text when running wtx, include a short phrase explaining what the commands do
+- [ ] wtx prune should also delete the branches, not just the worktrees (--force for deleting unmerged/uncommitted changes). but only the branches starting with the prefix.
+- [ ] fix the current fact that no env vars are read/venv isn't entered
+- [ ] run a refactor/tightening/making concise of wtx
 
-[ ] fix weird behavior that there shouldn't be recursive worktrees, by always constructing worktree path based on root repository .git directory -- currently recursive wtx worktree doesn't work.
-[ ] make wtx list actually show whether things are [TMUX ACTIVE] or [TMUX INACTIVE], and show message how to enter the tmuxes.
+- [x] fix weird behavior that there shouldn't be recursive worktrees, by always constructing worktree path based on root repository .git directory -- currently recursive wtx worktree doesn't work.
+- [x] make wtx list actually show whether things are [TMUX ACTIVE] or [TMUX INACTIVE], and show message how to enter the tmuxes.
 
 ## Phase 2 – Refinement
 - [ ] Implement `wtx finish` to merge, announce completion, and optionally prune.

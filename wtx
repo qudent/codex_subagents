@@ -22,21 +22,26 @@ has(){ command -v "$1" >/dev/null 2>&1; }
 ensure_tools(){ has git || die "git not found"; has tmux || die "tmux not found"; }
 ensure_repo(){ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "run inside a git repo"; }
 repo_root(){ git rev-parse --show-toplevel; }
-repo_name(){
-  local common root
+primary_repo_root(){
+  local common
   common=$(git rev-parse --git-common-dir)
-  root=$(cd "$common/.." && pwd)
+  (cd "$common/.." && pwd)
+}
+repo_name(){
+  local root
+  root="$(primary_repo_root)"
   basename "$root"
 }
 repo_git(){ git rev-parse --git-path .; }
 container_dir(){
-  local root="$(repo_root)"
   if [[ -n "$WTX_CONTAINER_DEFAULT" ]]; then
     printf '%s\n' "$WTX_CONTAINER_DEFAULT"
   else
-    local parent
+    local root parent name
+    root="$(primary_repo_root)"
     parent="$(cd "$root/.." && pwd)"
-    printf '%s\n' "$parent/$(repo_name).worktrees"
+    name="$(repo_name)"
+    printf '%s\n' "$parent/$name.worktrees"
   fi
 }
 ensure_container(){ local dir; dir="$(container_dir)"; mkdir -p "$dir"; }
@@ -160,6 +165,33 @@ print_create_result(){
   printf 'created branch=%s parent=%s worktree=%s session=%s\n' "$branch" "$parent" "$path" "$session"
 }
 
+print_list_entry(){
+  local branch="$1" wt="$2"
+  local display_branch parent session status attach
+  display_branch="$branch"
+  if [[ -z "$display_branch" ]]; then
+    display_branch="(detached)"
+  fi
+  parent=$(get_branch_parent "$branch" 2>/dev/null || echo "")
+  if [[ -n "$branch" ]]; then
+    session=$(session_name_for "$branch")
+    if tmux_has "$session"; then
+      status="[TMUX ACTIVE]"
+    else
+      status="[TMUX INACTIVE]"
+    fi
+    attach="tmux attach -t $session"
+  else
+    session=""
+    status="[NO BRANCH]"
+    attach=""
+  fi
+  printf '%-25s %-20s %-15s %s\n' "$display_branch" "$parent" "$status" "$wt"
+  if [[ -n "$session" ]]; then
+    printf '  attach: %s\n' "$attach"
+  fi
+}
+
 resolve_parent_branch(){
   local specified="$1"
   if [[ -n "$specified" ]]; then
@@ -237,31 +269,37 @@ create_branch(){
 }
 
 list_worktrees(){
-  ensure_repo
-  printf '%-25s %-20s %s\n' "BRANCH" "PARENT" "WORKTREE"
-  git worktree list --porcelain | awk '
-    /^worktree /{wt=$2}
-    /^branch /{
-      ref=$2
-      short=ref
-      if (ref ~ /^refs\/heads\//) {
-        short=substr(ref,12)
-      }
-    }
-    /^$/ {
-      branch=short
-      ref=""; short=""
-      parent=""
-      cmd="git config --get branch." branch ".description"
-      cmd | getline desc
-      close(cmd)
-      if (desc ~ /^parent=/) {
-        parent=substr(desc,8)
-      }
-      printf("%-25s %-20s %s\n", branch, parent, wt)
-      wt=""
-    }
-  '
+  ensure_tools; ensure_repo
+  printf '%-25s %-20s %-15s %s\n' "BRANCH" "PARENT" "TMUX" "WORKTREE"
+  local wt="" branch="" ref
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      worktree\ *)
+        if [[ -n "$wt" ]]; then
+          print_list_entry "$branch" "$wt"
+        fi
+        wt=${line#worktree }
+        branch=""
+        ;;
+      branch\ refs/heads/*)
+        ref=${line#branch refs/heads/}
+        branch="$ref"
+        ;;
+      branch\ *)
+        ref=${line#branch }
+        branch="$ref"
+        ;;
+      '')
+        if [[ -n "$wt" ]]; then
+          print_list_entry "$branch" "$wt"
+        fi
+        wt=""; branch=""; ref=""
+        ;;
+    esac
+  done < <(git worktree list --porcelain)
+  if [[ -n "$wt" ]]; then
+    print_list_entry "$branch" "$wt"
+  fi
 }
 
 policy_tokens(){
@@ -373,6 +411,25 @@ gc_empty_dirs(){
       done <<<"$session_list"
     fi
   fi
+  local current_branch
+  current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+  while IFS= read -r branch; do
+    [[ -n "$branch" ]] || continue
+    grep -Fxq "$branch" "$active_branches" && continue
+    [[ "$branch" == "$current_branch" ]] && continue
+    local parent
+    parent=$(get_branch_parent "$branch" 2>/dev/null || true)
+    [[ -n "$parent" ]] || continue
+    local slug prefix
+    slug=$(safe_slug "$parent")
+    [[ -n "$slug" ]] || continue
+    prefix="${slug}-"
+    [[ "$branch" == "$prefix"[0-9][0-9][0-9]* ]] || continue
+    if git branch -D "$branch" >/dev/null 2>&1; then
+      git config --unset "$(parents_desc_key "$branch")" >/dev/null 2>&1 || true
+      printf 'deleted branch %s\n' "$branch"
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
   rm -f "$active" "$active_branches" "$active_sessions"
 }
 
@@ -387,10 +444,10 @@ usage(){
 wtx — minimal agent workflow helper
 
 Usage:
-  wtx create [NAME] [-p|--parent BRANCH] [-c|--command "..."]
-  wtx message
-  wtx list
-  wtx prune
+  wtx create [NAME] [-p|--parent BRANCH] [-c|--command "..."]   Create an agent worktree and tmux session
+  wtx message                                                   Broadcast latest commit instructions to peers
+  wtx list                                                      Show worktrees with parent links and tmux status
+  wtx prune                                                     Remove stale worktrees, tmux sessions, and branches
 
 Environment:
   WTX_CONTAINER_DEFAULT  Override worktree parent directory
