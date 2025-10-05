@@ -3,7 +3,7 @@
 Vision
 - One terminal window per agent (tmux session). No in-place session switching.
 - absolutely minimal functionality:
-- "wtx create" adds worktree in git_root_dir/../<repo-name>.worktrees/<name>. Parent branch in branch description, "wtx add <name>" adds a specific name, if <name> not set, its a name derived from parent scheme + running counter. "wtx add <name> -c "<command>"" sends <command> and enter after spinning up. Spinning up involves linking .venv, source .venv/bin/activate, and pnpm install where applicable. tmux naming scheme reflects repo+branch name.
+- "wtx create" adds worktree in git_root_dir/../<repo-name>.worktrees/<name>. Parent branch in branch description, "wtx create <name>" adds a specific name, if <name> not set, its a name derived from parent scheme + running counter. "wtx create <name> -c "<command>"" sends <command> and enter after spinning up. Spinning up involves linking .venv, source .venv/bin/activate, and pnpm install where applicable. tmux naming scheme reflects repo+branch name.
 - "wtx message" messages according to WTX_MESSAGING_POLICY (default -- parent, children, possible: parents, children, all) about current commit, commit message, hash, precise command that target needs to enter to merge that commit.
 - "empty git commit for sending messages and logging things without changing files (e.g. "NOTIF: ran tests")"
 - "wtx prune" kills stale worktrees
