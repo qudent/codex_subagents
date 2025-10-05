@@ -108,7 +108,7 @@ The plan is still about ruthless prioritization, but now messaging is in the top
 - [ ] **Implement `wtx prune`** (as before)
 - [ ] **Write a minimal README.md**
     - [ ] Document the agent workflow: `wtx create`, make changes, `git commit` (auto-messages), exiting tmux, `wtx prune`
-    - [ ] Document `wtx list` as wrapper for `git worktree list`
+    - [ ] Document `wtx list` as wrapper for `git worktree list`.
 
 **Phase 2: Refinement**
 - [ ] **Implement `wtx finish`**
