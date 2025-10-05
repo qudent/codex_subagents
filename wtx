@@ -53,7 +53,7 @@ next_counter(){
   local n=1
   if [[ -f "$file" ]]; then
     n=$(<"$file")
-    n=$((n+1))
+    n=$((10#$n + 1))
   fi
   printf '%03d' "$n" >"$file"
   printf '%03d' "$n"
