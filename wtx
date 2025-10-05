@@ -444,14 +444,14 @@ usage(){
 wtx — minimal agent workflow helper
 
 Usage:
-  wtx create [NAME] [-p|--parent BRANCH] [-c|--command "..."]   Create an agent worktree and tmux session
-  wtx message                                                   Broadcast latest commit instructions to peers
+  wtx create [NAME] [-p|--parent BRANCH] [-c|--command "..."]   Create an agent worktree and tmux session branching from current commit, attempt open terminal window
+  wtx message                                                   Broadcast latest commit instructions to peers according to WTX_MESSAGING_POLICY
   wtx list                                                      Show worktrees with parent links and tmux status
-  wtx prune                                                     Remove stale worktrees, tmux sessions, and branches
+  wtx prune                                                     Remove stale worktrees, tmux sessions, and branches if either of them are missing
 
 Environment:
   WTX_CONTAINER_DEFAULT  Override worktree parent directory
-  WTX_MESSAGING_POLICY   Target policy for `wtx message` (parent, children, all)
+  WTX_MESSAGING_POLICY   Target policy for `wtx message` (parent, children, all) - default parent+children
   WTX_OSA_OPEN           Auto-launch macOS Terminal when creating sessions (default 1)
 USAGE
 }
