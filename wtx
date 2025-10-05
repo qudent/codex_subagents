@@ -8,6 +8,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 WTX_CONTAINER_DEFAULT="${WTX_CONTAINER_DEFAULT:-}"   # overrides worktree parent dir
 WTX_MESSAGING_POLICY="${WTX_MESSAGING_POLICY:-all}"  # parent,children,all
+WTX_OSA_OPEN="${WTX_OSA_OPEN:-1}"                     # 1 to auto-launch macOS Terminal via osascript
 
 # Absolute path to this script for use in git hooks
 WTX_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -16,6 +17,7 @@ WTX_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BAS
 # Helpers
 # -----------------------------------------------------------------------------
 die(){ echo "wtx: $*" >&2; exit 1; }
+is_macos(){ [[ "$(uname -s)" == "Darwin" ]]; }
 has(){ command -v "$1" >/dev/null 2>&1; }
 ensure_tools(){ has git || die "git not found"; has tmux || die "tmux not found"; }
 ensure_repo(){ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "run inside a git repo"; }
@@ -97,6 +99,26 @@ link_shared_environment(){
   if [[ -f "$root/.env" && ! -e "$wt/.env" ]]; then
     ln -s "$root/.env" "$wt/.env"
   fi
+}
+
+osascript_terminal_attach(){
+  local session="$1"
+  is_macos || return 0
+  [[ "$WTX_OSA_OPEN" == "1" ]] || return 0
+  local osa="$(command -v osascript 2>/dev/null || true)"
+  if [[ -z "$osa" ]]; then
+    if [[ -x /usr/bin/osascript ]]; then
+      osa="/usr/bin/osascript"
+    else
+      return 0
+    fi
+  fi
+  "$osa" <<APPLESCRIPT
+tell application "Terminal"
+  activate
+  do script "tmux attach -t ${session}"
+end tell
+APPLESCRIPT
 }
 
 start_tmux_session(){
@@ -200,9 +222,18 @@ create_branch(){
   set_branch_description "$branch" "$parent"
   link_shared_environment "$wt"
   install_post_commit_hook "$wt"
+  local session
+  session="$(session_name_for "$branch")"
+  local new_session=0
+  if ! tmux_has "$session"; then
+    new_session=1
+  fi
   start_tmux_session "$branch" "$wt"
+  if [[ "$new_session" -eq 1 ]]; then
+    osascript_terminal_attach "$session"
+  fi
   send_startup_command "$branch" "$command"
-  print_create_result "$branch" "$parent" "$wt" "$(session_name_for "$branch")"
+  print_create_result "$branch" "$parent" "$wt" "$session"
 }
 
 list_worktrees(){
@@ -364,6 +395,7 @@ Usage:
 Environment:
   WTX_CONTAINER_DEFAULT  Override worktree parent directory
   WTX_MESSAGING_POLICY   Target policy for `wtx message` (parent, children, all)
+  WTX_OSA_OPEN           Auto-launch macOS Terminal when creating sessions (default 1)
 USAGE
 }
 
