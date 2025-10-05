@@ -16,12 +16,16 @@
 - [x] wtx prune should also delete the branches, not just the worktrees (--force for deleting unmerged/uncommitted changes). but only the branches starting with the prefix.
 - [ ] fix the current fact that no env vars are read/venv isn't entered/pnpm install is not attempted
 - [ ] when a terminal opens, this should be run and briefly acknowledged, branch and parent name and fact that committing will message according to messaging policy should be acknowledged as well.
-- [ ] verify that wtx cleanup also cleans up branch name, --force deletes it
-- [ ] run a refactor/tightening/making concise of wtx
 
 - [x] fix weird behavior that there shouldn't be recursive worktrees, by always constructing worktree path based on root repository .git directory -- currently recursive wtx worktree doesn't work.
 - [x] make wtx list actually show whether things are [TMUX ACTIVE] or [TMUX INACTIVE], and show message how to enter the tmuxes.
+[ ] delete wtx list functionality + behavior + documentation as it will be replaced by wtx open
+[ ] delete wtx cleanup functionality + behavior + documentation, as wtx prune
+will be the way to do it
 
+
+- [ ] run a refactor/tightening/making concise of wtx
+- [ ] double check that README etx doesn't contain anything of previous README.md
 ## Phase 2 – Refinement
 - [ ] Implement `wtx finish` to merge, announce completion, and optionally prune.
 - [ ] Standardize environment variables (`WTX_*`) and tmux naming conventions.
