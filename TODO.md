@@ -99,6 +99,7 @@ The plan is still about ruthless prioritization, but now messaging is in the top
 **Phase 1: The Core Agent Loop**
 - [ ] **Implement `wtx create <name>`**
     - [ ] Creates worktree, branch, and `tmux` session.
+    - [ ] Runs the env/venv setup, links things, `pnpm install`, sources/exports .env env vars, etc.
     - [ ] **Installs a `post-commit` hook** that automatically runs `wtx message`.
 - [ ] **Implement `wtx message "<msg>"`**
     - [ ] Finds parent and child branches.
