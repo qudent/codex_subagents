@@ -137,19 +137,13 @@ Point 25. [x] Never touch untracked worktrees not created by wtx.
 
 4. Environment policy
 
-Point 26. [x] Python: use one shared uv environment (not per-worktree).
+Point 26. [ ] Python: use per-repository uv environment (not global) at $(git rev-parse --git-common-dir)/../.venv (supersedes earlier shared env design; implementation pending).
 
+    Point 27. [ ] Env default path: $(git rev-parse --git-common-dir)/../.venv (override with $WTX_UV_ENV if set) — implement creation & upgrade logic.
 
+    Point 28. [ ] Create on first use: uv venv "${WTX_UV_ENV:-$(git rev-parse --git-common-dir)/../.venv}".
 
-    Point 27. [x] Env path: $WTX_UV_ENV (default ~/.wtx/uv-shared).
-
-
-
-    Point 28. [x] Create on first use: uv venv "$WTX_UV_ENV".
-
-
-
-    Point 29. [x] Prepend "$WTX_UV_ENV/bin" to PATH for each session.
+    Point 29. [ ] Prepend "${WTX_UV_ENV:-$(git rev-parse --git-common-dir)/../.venv}/bin" to PATH for each session.
 
 
 
@@ -272,7 +266,7 @@ Point 53. [ ] No protocol / ack; best-effort fire-and-forget; failures (missing 
 
 9. Prune command
 
-Point 54. [ ] Command: wtx prune [--dry-run]. — prune command not implemented yet.
+Point 54. [ ] Command: wtx-prune [--dry-run]. — prune command not implemented yet.
 
 
 
@@ -328,7 +322,9 @@ Point 64. [x] Always create dirs 700 permissions.
 
 Point 65. [x] Log each command run with timestamp → $WTX_GIT_DIR/wtx/logs/YYYY-MM-DD.log.
 
-
+Point 65a. [ ] (Git logging) Unless --no-git-logging passed, emit empty commits for each -c invocation / spinup:
+            git commit --allow-empty -m "WTX_COMMAND: <raw user command>" or "WTX_SPINUP: <details>".
+            Warn users (docs) not to paste secrets when this mode active. (Implements Point 99.)
 
 ⸻
 
@@ -405,7 +401,7 @@ Point 75. [x] Tests: — Automated via tests/wtx.bats.
 
 
 
-    Point 81. [ ] prune --dry-run lists expected items. — Prune flow absent, so no tests yet.
+    Point 81. [ ] wtx-prune --dry-run lists expected items. — Prune flow absent, so no tests yet.
 
 
 
@@ -421,6 +417,7 @@ Point 75. [x] Tests: — Automated via tests/wtx.bats.
 
     Point 81d. [ ] Attach suppression with --no-open prints attach command but does not spawn window (detect via mock).
 
+    Point 81e. [ ] Git logging test: run wtx -c twice, assert two empty commits with prefix WTX_COMMAND unless --no-git-logging flag used (then zero). (Covers Point 99.)
 Point 82. [x] Run tests for both tmux and screen backends.
 
 
@@ -455,6 +452,7 @@ Point 86. [ ] Include troubleshooting: “session exists”, “worktree already
 
 Point 86a. [ ] Document WTX_OPEN_STRATEGY order and fallback behavior.
 
+Point 86b. [ ] Document git commit logging feature & --no-git-logging flag; include secrecy warning (implements Point 99 docs).
 ⸻
 
 15. Future/optional features
@@ -475,7 +473,7 @@ Point 90. [ ] Optionally integrate simple progress messages (spinner or [ok]). �
 
 
 
-Point 91. [ ] Optionally support wtx prune --delete-branches. — Future enhancement.
+Point 91. [ ] Optionally support wtx-prune --delete-branches. — Future enhancement.
 
 
 
@@ -497,7 +495,7 @@ Point 94. [x] All state ephemeral in .git/wtx/.
 
 
 
-Point 95. [x] Shared uv env only; per-worktree envs discouraged.
+Point 95. [ ] Per-repository uv environment (path $(git rev-parse --git-common-dir)/../.venv) replaces prior global shared env for better isolation (implements Point 100; pending implementation).
 
 
 
