@@ -286,8 +286,9 @@ prune_command() {
   fi
   worktree_root="$(dirname "$REPO_ROOT")/${REPO_BASENAME}.worktrees"
   if [ -d "$worktree_root" ]; then
-    git -C "$REPO_ROOT" worktree list --porcelain | awk '/^worktree /{print $2}' >"$WTX_GIT_DIR_ABS/.tracked"
-    for path in "$worktree_root"/*; do
+    git -C "$REPO_ROOT" worktree list --porcelain \
+      | awk '/^worktree /{sub(/^worktree /, ""); print}' >"$WTX_GIT_DIR_ABS/.tracked"
+    while IFS= read -r -d '' path; do
       [ -e "$path" ] || continue
       if ! grep -Fxq "$path" "$WTX_GIT_DIR_ABS/.tracked"; then
         echo "rm-worktree $path"; actions=1
@@ -296,7 +297,7 @@ prune_command() {
           rm -f "$WTX_GIT_DIR_ABS/state/$(basename "$path").json"
         fi
       fi
-    done
+    done < <(find "$worktree_root" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
     rm -f "$WTX_GIT_DIR_ABS/.tracked"
   fi
   if [ "$PRUNE_DELETE_BRANCHES" -eq 1 ]; then
