@@ -53,12 +53,11 @@ Point 9. [x] --mux selects backend (default: auto → prefer tmux).
 
 
 
-Point 10. [x] --no-open suppresses GUI terminal focus.
+Point 10. [x] --no-open suppresses GUI/OS-level terminal window spawning/focus logic (see GUI section); still prints attach command.
 
 
 
 Point 11. [x] --from selects parent commit (defaults to current HEAD).
-
 
 
 
@@ -80,7 +79,6 @@ Point 15. [ ] So to spin down a particular branch without command: wtx [branch-n
 
 
 Point 16. [ ] to spin down the branch we are in now: wtx $(git rev-parse --abbrev-ref HEAD) --close — Close workflow not implemented yet.
-
 
 
 
@@ -113,7 +111,6 @@ Point 21. [x] Keep this metadata human-readable (git config branch.<name>.descri
 
 
 
-
 ⸻
 
 3. Worktree setup
@@ -131,7 +128,6 @@ Point 24. [x] If present → verify the path and branch match (idempotency).
 
 
 Point 25. [x] Never touch untracked worktrees not created by wtx.
-
 
 
 
@@ -168,7 +164,6 @@ Point 30. [x] JavaScript: use pnpm.
 
 
 Point 33. [x] All env operations must be idempotent (re-running wtx never damages an existing env).
-
 
 
 
@@ -213,7 +208,6 @@ Point 41. [x] Keep same naming to permit fast attach.
 
 
 
-
 ⸻
 
 6. Input & live command sending
@@ -236,53 +230,41 @@ Point 45. [ ] Confirm hot path completes in ≤25 ms on modern hardware. — Per
 
 
 
-
 ⸻
 
-7. GUI behavior
+7. GUI / OS-level window behavior (updated)
 
-Point 46. [ ] If --no-open not set: — GUI terminal focus/open step not implemented.
+Point 46. [ ] On successful (create|reuse) if --no-open NOT set: spawn/focus a NEW terminal window (never hijack current terminal) using platform strategy: macOS (osascript Terminal / iTerm2 if available), Linux/X11 ($TERMINAL or x-terminal-emulator -e), Wayland (foot/kitty/alacritty fallback), else print attach instructions only.
 
+    Point 46a. [ ] Strategy order configurable via env WTX_OPEN_STRATEGY (comma list: iterm,apple-terminal,kitty,alacritty,wezterm,gnome-terminal,foot,xterm,print). First succeeding command used.
 
+    Point 46b. [ ] Each strategy launches a window already running `tmux attach -t <session>` (or screen -r) and foregrounds it.
 
-    Point 47. [ ] Try to focus/open a GUI terminal attached to the session — Platform-specific GUI automation not implemented.
+Point 47. [x] --no-open means: do NOT spawn/focus any GUI window; always just print attach instructions to stdout (idempotent; safe in CI).
 
+Point 48. [ ] If all spawn strategies fail → fall back to printing attach command (always printed anyway for scripting) and exit 0 (no hard failure).
 
-
-        macOS → AppleScript tell app "Terminal" to do script "tmux attach -t $SES"
-        Linux → $TERMINAL -e "tmux attach -t $SES".
-Point 48. [ ] If focusing fails → print the attach command for manual use. — Always prints attach instructions; no GUI focus fallback logic yet.
-
-
-
+Point 48a. [ ] Output explicitly states: open=spawned|suppressed|failed.
 
 ⸻
 
 8. Messaging policy
 
-Point 49. [ ] Environment variable WTX_MESSAGING_POLICY controls cross-session notices (parent,children default). — Cross-session messaging still pending.
+Point 49. [ ] Environment variable WTX_MESSAGING_POLICY controls cross-session notices. Allowed values (simplified): all | parent | children | parent+children (default: parent+children). No other modes. Semantics:
+    • parent: notify only the direct parent branch session (if it exists).
+    • children: notify only immediate child branch sessions (those whose recorded parent_branch = current branch).
+    • parent+children: union of parent and children (default practical collaboration mode).
+    • all: every related session in the ancestry and descendant tree (transitive). Used mainly for broad broadcast (e.g. CI status) but may create more noise.
 
+Point 50. [ ] On new commit or branch event → build message line (single echoable comment) with commit sha & subject (first line only).
 
+# [wtx] <branch> commit <short-sha> "<subject>"
 
-Point 50. [ ] On new commit or branch event → build message: — Cross-session messaging still pending.
+Point 51. [ ] Send this line (raw keystrokes) to each targeted session per policy via tmux send-keys / screen stuff.
 
+Point 52. [ ] Message always begins with '# ' so it is a shell comment if surfaced in interactive history.
 
-
-
-# [wtx] on <branch>: commit <sha> "<msg>" — merge: git merge <sha>
-
-Point 51. [ ] Send this line as raw keystrokes to targeted sessions (tmux/screen). — Cross-session messaging still pending.
-
-
-
-Point 52. [ ] Ensure it’s commented (#) so it’s safe if pasted in shell. — Cross-session messaging still pending.
-
-
-
-Point 53. [ ] No complex protocol — Cross-session messaging still pending.
-
-
-
+Point 53. [ ] No protocol / ack; best-effort fire-and-forget; failures (missing session) silently skipped (optionally logged with --debug later).
 
 ⸻
 
@@ -320,7 +302,6 @@ Point 61. [ ] Never touch non-wtx branches or worktrees. — prune command not i
 
 
 
-
 ⸻
 
 10. State & logs
@@ -347,12 +328,11 @@ Point 65. [x] Log each command run with timestamp → $WTX_GIT_DIR/wtx/logs/YYYY
 
 
 
-
 ⸻
 
 11. Banner verification
 
-Point 66. [x] When user attaches, first line printed should always show repo, branch, parent, and summary of actions (linked, created, skipped, etc.).
+Point 66. [x] When user attaches, first line printed should always show repo, branch, parent, parent commit (if detached) and summary of actions (linked, created, skipped, etc.).
 
 
 
@@ -389,10 +369,11 @@ Point 73. [ ] Output should clearly say whether each resource was created, reuse
 
 
 
+Point 73a. [ ] Output includes open=spawned|suppressed|failed metric.
 
 ⸻
 
-13. Testing & validation
+13. Testing & validation (expanded)
 
 Point 74. [x] Create BATS or shell test suite.
 
@@ -426,8 +407,19 @@ Point 75. [x] Tests: — Automated via tests/wtx.bats.
 
 
 
-Point 82. [x] Run tests for both tmux and screen backends.
+    Point 81a. [ ] Messaging policy tests: all, parent, children, parent+children — verify correct delivery set per policy.
 
+    Point 81b. [ ] Recursive branch graph test: create depth ≥3; verify:
+        • children: only level +1
+        • parent: only direct parent
+        • parent+children: union of above
+        • all: reaches all ancestors & descendants without duplication.
+
+    Point 81c. [ ] GUI spawn test (macOS mocked osascript & Linux fake $WTX_OPEN_STRATEGY) ensures open=spawned and suppressed.
+
+    Point 81d. [ ] Attach suppression with --no-open prints attach command but does not spawn window (detect via mock).
+
+Point 82. [x] Run tests for both tmux and screen backends.
 
 
 
@@ -442,23 +434,24 @@ Point 83. [ ] Provide README section with example workflow: — README/docs stil
 
 # start new branch
 wtx feature-x
-# run quick test
+# automatic new window attach (unless --no-open)
 wtx feature-x -c 'pytest -q'
 # open again later
 wtx feature-x
 
-Point 84. [ ] Explain environment variables (WTX_GIT_DIR, WTX_UV_ENV, WTX_MESSAGING_POLICY). — Environment variable documentation pending.
+Point 84. [ ] Explain environment variables (WTX_GIT_DIR, WTX_UV_ENV, WTX_MESSAGING_POLICY values: all|parent|children|parent+children, WTX_OPEN_STRATEGY).
 
 
 
-Point 85. [ ] Clarify that raw keystrokes are unfiltered (behave like manual typing). — Raw keystroke behavior not documented yet.
+Point 85. [ ] Clarify that raw keystrokes are unfiltered (behave like manual typing).
 
 
 
-Point 86. [ ] Include troubleshooting: “session exists”, “worktree already exists”, etc. — Troubleshooting section pending.
+Point 86. [ ] Include troubleshooting: “session exists”, “worktree already exists”, GUI open failed (attach manually), etc.
 
 
 
+Point 86a. [ ] Document WTX_OPEN_STRATEGY order and fallback behavior.
 
 ⸻
 
@@ -484,6 +477,7 @@ Point 91. [ ] Optionally support wtx prune --delete-branches. — Future enhance
 
 
 
+Point 91a. [ ] Optional: platform-specific fancy notification on spawn (macOS display notification, Linux notify-send) after environment ready.
 
 ⸻
 
@@ -513,6 +507,7 @@ Point 97. [x] Raw keystroke injection only; no FIFO protocol or auth overhead.
 
 
 
+Point 98. [ ] Auto-open never blocks core logic; failures are soft; attach command always emitted.
 
 ⸻
 
@@ -521,9 +516,9 @@ After every checklist item is implemented and ticked, the user experience is:
 
 # create a new living branch environment
 wtx
-# attach automatically
-# see banner: wtx: repo=foo branch=wtx/main-003 parent=main actions=[env, pnpm:skipped]
+# new terminal window opens + attaches automatically (unless --no-open)
+# see banner: wtx: repo=foo branch=wtx/main-003 parent=main actions=[env, pnpm:skipped, open:spawned]
 # run code/tests
 wtx -c "pytest"
 
-All worktrees are in ../repo.worktrees/…, all state lives in .git/wtx/, and attaching to any branch instantly restores its environment.
+All worktrees are in ../repo.worktrees/…, all state lives in .git/wtx/, and attaching to any branch instantly restores its environment. Attach instructions are always printed for scripting/CI (and indicate open=suppressed when --no-open used).
