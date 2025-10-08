@@ -2,6 +2,19 @@ Awesome — here’s a patched, ready-to-implement checklist with all the fixes 
 
 ⸻
 
+wtx refactor + messaging coverage iteration
+
+[x] 0.0 Capture new requirements in PRD.md (multi-file split, messaging grandchildren coverage, test length guard).
+[x] 0.1 Run git pull to sync with main before coding (no upstream remote configured, recorded for review).
+[x] 0.2 Lay out updated implementation plan in this TODO checklist (module split, messaging policy expansion, tests) and tick tasks as completed.
+[x] 0.2a Split the monolithic wtx script into common/args/state/mux/messaging/close/prune/launch modules and wire a new dispatcher.
+[x] 0.2b Extend messaging policy logic to target parent/child/grandchild branches with targeted session delivery.
+[x] 0.2c Cover messaging policy across grandchildren with Bats while keeping each test file ≤200 lines.
+[x] 0.3 Anchor wtx state storage to the git common dir so nested worktrees share state and close --merge can resolve parents.
+[x] 0.4 Replace comm-based branch diffing with portable helpers and split Bats messaging coverage into a separate file to keep suites under 200 lines.
+
+⸻
+
 wtx worktree/mux launcher — Patched Implementation Checklist
 
 Conventions used below:
