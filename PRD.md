@@ -241,17 +241,29 @@ Point 45. [ ] Confirm hot path completes in ≤25 ms on modern hardware. — Per
 
 7. GUI behavior
 
-Point 46. [x] If --no-open not set: — Implemented via try_gui_attach helper with tmux/screen fallbacks.
+Point 46. [x] If --no-open not set, wtx best-effort spawns or focuses a terminal via try_gui_attach (AppleScript, $WTX_TERMINAL, x-terminal-emulator fallbacks).
 
 
 
-    Point 47. [x] Try to focus/open a GUI terminal attached to the session — AppleScript, $WTX_TERMINAL, and x-terminal-emulator fallbacks wired through try_gui_attach.
+    Point 46a. [ ] Strategy order configurable via env WTX_OPEN_STRATEGY (planned; current heuristics are static).
+
+
+
+    Point 46b. [ ] Each strategy launches `tmux attach -t <session>` and foregrounds it; present helpers cover Terminal/$WTX_TERMINAL/x-terminal only.
+
+
+
+Point 47. [x] --no-open suppresses GUI/OS-level spawning and still prints the attach command for manual use.
 
 
 
         macOS → AppleScript tell app "Terminal" to do script "tmux attach -t $SES"
         Linux → $TERMINAL -e "tmux attach -t $SES".
-Point 48. [x] If focusing fails → print the attach command for manual use. — Scripts now emit attach command only when GUI launch fails or --no-open set.
+Point 48. [x] If spawning/focus fails → print the attach command and continue without error.
+
+
+
+Point 48a. [ ] Output should surface open=spawned|suppressed|failed metrics for observability.
 
 
 
@@ -389,6 +401,10 @@ Point 73. [ ] Output should clearly say whether each resource was created, reuse
 
 
 
+Point 73a. [ ] Output includes open=spawned|suppressed|failed metric for follow-up debugging.
+
+
+
 
 ⸻
 
@@ -426,6 +442,22 @@ Point 75. [x] Tests: — Automated via tests/wtx.bats.
 
 
 
+    Point 81a. [ ] Messaging policy tests: all, parent, children, parent+children — verify delivery sets per policy.
+
+
+
+    Point 81b. [ ] Recursive branch graph test (depth ≥3) covering parent/child/all permutations without duplication.
+
+
+
+    Point 81c. [ ] GUI spawn test (macOS mocked osascript & Linux fake $WTX_OPEN_STRATEGY) ensures open=spawned and suppressed.
+
+
+
+    Point 81d. [ ] Attach suppression with --no-open prints attach command but does not spawn window (detect via mock).
+
+
+
 Point 82. [x] Run tests for both tmux and screen backends.
 
 
@@ -459,6 +491,10 @@ Point 86. [ ] Include troubleshooting: “session exists”, “worktree already
 
 
 
+Point 86a. [ ] Document WTX_OPEN_STRATEGY order and fallback behavior.
+
+
+
 
 ⸻
 
@@ -481,6 +517,10 @@ Point 90. [ ] Optionally integrate simple progress messages (spinner or [ok]). �
 
 
 Point 91. [x] Optionally support wtx prune --delete-branches. — Implemented flag removes merged wtx/* branches when requested.
+
+
+
+Point 91a. [ ] Optional: platform notifications after environment ready (macOS display notification, Linux notify-send).
 
 
 
@@ -527,3 +567,12 @@ wtx
 wtx -c "pytest"
 
 All worktrees are in ../repo.worktrees/…, all state lives in .git/wtx/, and attaching to any branch instantly restores its environment.
+
+
+More additions/changes
+<USER_FEEDBACK_TODO>
+Point 99. [ ] By default, unless --no-git-logging is passed, log via empty git commits per wtx -c invocation (warn about secrets in README).
+
+
+
+Point 100. [ ] Make the uv environment per-repo at $(git rev-parse --git-common-dir)/../.venv instead of shared global.

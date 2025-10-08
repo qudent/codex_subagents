@@ -425,6 +425,7 @@ logv "mux=$MUX"
 PARENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)
 PARENT_SHA=$(git rev-parse "$FROM_REF")
 PARENT_SHORT=$(git rev-parse --short "$PARENT_SHA")
+# portable lock (no flock)
 lock_key=$(sanitize_component "$PARENT_BRANCH")
 lockdir="$WTX_GIT_DIR_ABS/locks/${lock_key}.lockdir"
 while ! mkdir "$lockdir" 2>/dev/null; do sleep 0.05; done
@@ -477,16 +478,19 @@ if [ -f "$WT_DIR/package.json" ] && need pnpm; then
   PNPM_STAMP="$WT_DIR/.wtx_pnpm_stamp"
   if [ ! -d "$WT_DIR/node_modules" ] || { [ -f "$WT_DIR/pnpm-lock.yaml" ] && [ "$WT_DIR/pnpm-lock.yaml" -nt "$PNPM_STAMP" ]; }; then
     ( cd "$WT_DIR" && pnpm install --frozen-lockfile )
-    tmp=$(mktemp "$WT_DIR/.wtx_pnpm.XXXXXX"); date +%s >"$tmp"; mv "$tmp" "$PNPM_STAMP"
+    tmp=$(mktemp "$WT_DIR/.wtx_pnpm.XXXXXX") && date +%s >"$tmp" && mv "$tmp" "$PNPM_STAMP"
     PNPM_STATUS="installed"
   else
     PNPM_STATUS="skipped"
   fi
 fi
 
+# -------- session naming & repo id --------
 ses_repo=$(sanitize_component "$REPO_BASENAME")
 ses_branch=$(sanitize_component "$BRANCH_NAME")
 SES_NAME="wtx_${ses_repo}_${ses_branch}"
+
+# -------- banner values --------
 if [ "$PARENT_BRANCH" = "detached" ]; then
   PARENT_LABEL="detached@${PARENT_SHORT}"
 else
@@ -497,22 +501,26 @@ attach_cmd=""
 
 INIT="$WTX_GIT_DIR_ABS/state/wtx-init.sh"
 if [ ! -f "$INIT" ]; then
-  cat >"$INIT" <<'EOS'
+  cat >"$INIT" <<'EOF'
 # wtx init (sourced inside tmux/screen session)
 if [ -n "${WTX_UV_ENV:-}" ] && [ -d "$WTX_UV_ENV/bin" ]; then
-  PATH="$WTX_UV_ENV/bin:$PATH"; export PATH
+  PATH="$WTX_UV_ENV/bin:$PATH"
+  export PATH
 fi
 if [ "${WTX_PROMPT:-0}" = "1" ]; then
   PS1="[wtx:${BRANCH_NAME}] $PS1"
 fi
-export WTX_UV_ENV REPO_BASENAME BRANCH_NAME PARENT_LABEL FROM_REF ACTIONS WTX_PROMPT
+printf 'wtx: repo=%s branch=%s parent=%s from=%s actions=[%s]\n' \
+  "${REPO_BASENAME:-?}" "${BRANCH_NAME:-?}" "${PARENT_LABEL:-?}" "${FROM_REF:-?}" "${ACTIONS:-?}"
 if command -v tmux >/dev/null 2>&1; then
   tmux set-option -t "$(tmux display-message -p '#S' 2>/dev/null)" @wtx_ready 1 2>/dev/null || true
 fi
-EOS
+export WTX_UV_ENV REPO_BASENAME BRANCH_NAME PARENT_LABEL FROM_REF ACTIONS WTX_PROMPT
+EOF
 fi
 q() { printf %q "$1"; }
 
+# -------- tmux path --------
 if [ "$MUX" = "tmux" ]; then
   if ! tmux has-session -t "$SES_NAME" 2>/dev/null; then
     tmux new-session -d -s "$SES_NAME" -c "$WT_DIR"
@@ -521,12 +529,15 @@ if [ "$MUX" = "tmux" ]; then
   else
     session_action="reattach"
   fi
-  ACTIONS="$ACTIONS, session:${session_action}"
-  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS") WTX_PROMPT=$(q "$WTX_PROMPT")"
+
+  ACTIONS_WITH_SESSION="$ACTIONS, session:${session_action}"
+  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS_WITH_SESSION") WTX_PROMPT=$(q "$WTX_PROMPT")"
   tmux send-keys -t "$SES_NAME" "$env_line . $(q "$INIT")" C-m
-  banner="wtx: repo=$REPO_BASENAME branch=$BRANCH_NAME parent=$PARENT_LABEL from=$FROM_REF actions=[$ACTIONS]"
-  tmux send-keys -t "$SES_NAME" "printf '%s\\n' '$(printf "%s" "$banner" | sed "s/'/\\\\'/g")'" C-m
-  if [ -n "$CMD" ]; then tmux send-keys -t "$SES_NAME" "$CMD" C-m; fi
+
+  if [ -n "$CMD" ]; then
+    tmux send-keys -t "$SES_NAME" "$CMD" C-m
+  fi
+
   if [ $NO_OPEN -eq 0 ]; then
     attach_candidate="tmux attach -t '$SES_NAME'"
     if [ -n "${TMUX:-}" ]; then
@@ -538,19 +549,27 @@ if [ "$MUX" = "tmux" ]; then
   else
     attach_cmd="tmux attach -t '$SES_NAME'"
   fi
-elif [ "$MUX" = "screen" ]; then
+
+  ACTIONS="$ACTIONS_WITH_SESSION"
+fi
+
+# -------- screen path --------
+if [ "$MUX" = "screen" ]; then
   if ! screen -ls 2>/dev/null | grep -q "\.${SES_NAME}[[:space:]]"; then
     screen -dmS "$SES_NAME" sh -c "cd $(q "$WT_DIR"); exec \$SHELL"
     session_action="created"
   else
     session_action="reattach"
   fi
-  ACTIONS="$ACTIONS, session:${session_action}"
-  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS") WTX_PROMPT=$(q "$WTX_PROMPT")"
+
+  ACTIONS_WITH_SESSION="$ACTIONS, session:${session_action}"
+  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS_WITH_SESSION") WTX_PROMPT=$(q "$WTX_PROMPT")"
   screen -S "$SES_NAME" -p 0 -X stuff "$env_line . $(q "$INIT")$(printf '\r')"
-  banner="wtx: repo=$REPO_BASENAME branch=$BRANCH_NAME parent=$PARENT_LABEL from=$FROM_REF actions=[$ACTIONS]"
-  screen -S "$SES_NAME" -p 0 -X stuff "printf '%s\\n' '$(printf "%s" "$banner" | sed "s/'/\\\\'/g")'$(printf '\r')"
-  if [ -n "$CMD" ]; then screen -S "$SES_NAME" -p 0 -X stuff "$CMD$(printf '\r')"; fi
+
+  if [ -n "$CMD" ]; then
+    screen -S "$SES_NAME" -p 0 -X stuff "$CMD$(printf '\r')"
+  fi
+
   if [ $NO_OPEN -eq 0 ]; then
     attach_candidate="screen -r '$SES_NAME'"
     if ! try_gui_attach "$attach_candidate"; then
@@ -560,6 +579,8 @@ elif [ "$MUX" = "screen" ]; then
   else
     attach_cmd="screen -r '$SES_NAME'"
   fi
+
+  ACTIONS="$ACTIONS_WITH_SESSION"
 fi
 
 logf="$WTX_GIT_DIR_ABS/logs/$(date +%F).log"
