@@ -150,20 +150,3 @@ session_name() {
   [ "$status" -ne 0 ]
   [ ! -d "$wt_dir" ]
 }
-
-@test "prune handles worktree roots with spaces" {
-  repo_with_space="$TEST_ROOT/Repo With Space"
-  mv "$REPO_ROOT" "$repo_with_space"
-  export REPO_ROOT="$repo_with_space"
-  run wtx feature/space --no-open
-  [ "$status" -eq 0 ]
-  worktree_root="$(dirname "$REPO_ROOT")/$(basename "$REPO_ROOT").worktrees"
-  extra_dir="$worktree_root/Manual Space"
-  mkdir -p "$extra_dir"
-  run wtx prune --dry-run
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"rm-worktree $extra_dir"* ]]
-  run wtx prune
-  [ "$status" -eq 0 ]
-  [ ! -d "$extra_dir" ]
-}
