@@ -10,6 +10,9 @@ Conventions used below:
 	•	Everything is Bash (#!/usr/bin/env bash), no zsh-isms.
 
 ⸻
+Caveats
+
+0.0 [ ] be compatible with the old Mac OS bash version etc.
 
 0) Shell hygiene & mode
 
