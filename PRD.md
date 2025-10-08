@@ -1,6 +1,8 @@
 Perfect — you’re asking for the complete context + vision of wtx rewritten as a structured, fine-grained checklist where every single step or assumption is something that can be ticked off or verified during implementation or review.
 Below is exactly that: a practical, readable “execution spec” for wtx, including both the intended behavior and the implementation checklist you can literally check box by box.
 
+To agents working on this: Please write your notes BELOW each item, in the empty lines left for that.
+
 ⸻
 
 ✅ wtx Vision & Intended Usage (context checklist)
@@ -522,3 +524,10 @@ wtx
 wtx -c "pytest"
 
 All worktrees are in ../repo.worktrees/…, all state lives in .git/wtx/, and attaching to any branch instantly restores its environment. Attach instructions are always printed for scripting/CI (and indicate open=suppressed when --no-open used).
+
+
+More additions/changes
+<USER_FEEDBACK_TODO>
+Point 99. [ ] By default, unless --no-git-logging is passed, we implement logging by empty git commit messages in branches for every passed by a wtx -c  invocation (git commit --allow-empty -m "WTX_COMMAND: <what the user instructed>" or "WTX_SPINUP: <if we spin up a new tree>)".README should briefly warn against copypasting secrets in that mode.
+
+Point 100. [ ] the venv directory should be not global, but per repository (under GIT) at $(git rev-parse --git-common-dir)/../.venv
