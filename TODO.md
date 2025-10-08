@@ -12,11 +12,11 @@ Conventions used below:
 ⸻
 Caveats
 
-0.0 [ ] be compatible with the old Mac OS bash version etc.
+0.0 [x] be compatible with the old Mac OS bash version etc.
 
 0) Shell hygiene & mode
 
-[ ] 0.1 Add shebang and strict mode
+[x] 0.1 Add shebang and strict mode
 
 #!/usr/bin/env bash
 set -euo pipefail
@@ -37,13 +37,13 @@ need() { command -v "$1" >/dev/null 2>&1; }
 1) Bootstrap & globals
 
 [ ] 1.1 Parse args: NAME?, -c CMD?, --no-open?, --mux?, --from REF?, --dry-run?, --verbose?, --delete-branches?
-[ ] 1.2 Resolve repo & names
+[x] 1.2 Resolve repo & names
 
 REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "Not in a git repo"; exit 1; }
 GIT_DIR=$(git rev-parse --git-dir)
 REPO_BASENAME=$(basename "$REPO_ROOT")
 
-[ ] 1.3 Defaults
+[x] 1.3 Defaults
 
 MUX=${MUX:-auto}            # auto|tmux|screen
 WTX_GIT_DIR=${WTX_GIT_DIR:-"$GIT_DIR/wtx"}
@@ -51,7 +51,7 @@ WTX_UV_ENV=${WTX_UV_ENV:-"$HOME/.wtx/uv-shared"}
 WTX_MESSAGING_POLICY=${WTX_MESSAGING_POLICY:-parent,children}
 WTX_PROMPT=${WTX_PROMPT:-0} # 1 to mutate PS1 (off by default)
 
-[ ] 1.4 Runtime dirs & perms (log action)
+[x] 1.4 Runtime dirs & perms (log action)
 
 mkdir -p "$WTX_GIT_DIR"/{logs,locks,state}
 chmod 700 "$WTX_GIT_DIR" || true
@@ -61,7 +61,7 @@ chmod 700 "$WTX_GIT_DIR" || true
 
 2) Detect mux backend
 
-[ ] 2.1 Choose backend
+[x] 2.1 Choose backend
 
 if [[ $MUX == auto ]]; then
   if need tmux; then MUX=tmux
@@ -69,20 +69,20 @@ if [[ $MUX == auto ]]; then
   else echo "Need tmux or screen"; exit 2; fi
 fi
 
-[ ] 2.2 One-line decision log printed (for diagnostics)
+[x] 2.2 One-line decision log printed (for diagnostics)
 
 ⸻
 
 3) Determine parent & branch name (safe, race-free)
 
-[ ] 3.1 Resolve FROM_REF and parent
+[x] 3.1 Resolve FROM_REF and parent
 
 FROM_REF=${FROM_REF:-HEAD}
 PARENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)
 PARENT_SHA=$(git rev-parse "$FROM_REF")
 PARENT_SHORT=$(git rev-parse --short "$PARENT_SHA")
 
-[ ] 3.2 If NAME omitted, auto-number with lock
+[x] 3.2 If NAME omitted, auto-number with lock
 	•	Portable lock (macOS safe):
 
 lockdir="$WTX_GIT_DIR/locks/${PARENT_BRANCH}.lockdir"
@@ -98,7 +98,7 @@ existing=$(git for-each-ref --format='%(refname:short)' \
 NN=$(( ${existing:-0} + 1 ))
 BRANCH_NAME=${NAME:-"wtx/${PARENT_BRANCH}-${NN}"}
 
-[ ] 3.3 Compute sanitized worktree name
+[x] 3.3 Compute sanitized worktree name
 
 WORKTREE_NAME=$(printf %s "$BRANCH_NAME" | tr '/:' '__')
 
@@ -107,20 +107,20 @@ WORKTREE_NAME=$(printf %s "$BRANCH_NAME" | tr '/:' '__')
 
 4) Ensure branch exists + metadata (robust quoting)
 
-[ ] 4.1 Create branch if missing (with fallback)
+[x] 4.1 Create branch if missing (with fallback)
 
 if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   git branch "$BRANCH_NAME" "$FROM_REF" 2>/dev/null || \
   git branch --no-track "$BRANCH_NAME" "$FROM_REF"
 fi
 
-[ ] 4.2 Set description safely
+[x] 4.2 Set description safely
 
 printf -v desc 'wtx: created_by=wtx\nwtx: parent_branch=%s\nwtx: from_ref=%s' \
   "$PARENT_BRANCH" "$FROM_REF"
 git config "branch.$BRANCH_NAME.description" "$desc"
 
-[ ] 4.3 Persist tiny state JSON (atomic)
+[x] 4.3 Persist tiny state JSON (atomic)
 
 state="$WTX_GIT_DIR/state/$WORKTREE_NAME.json"
 tmp=$(mktemp); printf '{"created_by":"wtx","parent_branch":"%s","from_ref":"%s"}\n' \
@@ -131,19 +131,19 @@ tmp=$(mktemp); printf '{"created_by":"wtx","parent_branch":"%s","from_ref":"%s"}
 
 5) Worktree creation & path (repair zombies)
 
-[ ] 5.1 Paths
+[x] 5.1 Paths
 
 WORKTREE_ROOT="$(dirname "$REPO_ROOT")/${REPO_BASENAME}.worktrees"
 WT_DIR="$WORKTREE_ROOT/$WORKTREE_NAME"
 mkdir -p "$WORKTREE_ROOT"
 
-[ ] 5.2 If dir exists but not registered → repair
+[x] 5.2 If dir exists but not registered → repair
 
 if [[ -d "$WT_DIR" ]] && ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
   git -C "$REPO_ROOT" worktree prune || true
 fi
 
-[ ] 5.3 Ensure worktree present
+[x] 5.3 Ensure worktree present
 
 if ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
   git -C "$REPO_ROOT" worktree add "$WT_DIR" "$BRANCH_NAME"
@@ -154,7 +154,7 @@ fi
 
 6) Shared uv env (optional, logged)
 
-[ ] 6.1 Create if missing (if uv found)
+[x] 6.1 Create if missing (if uv found)
 
 if need uv; then
   [[ -d "$WTX_UV_ENV" ]] || uv venv "$WTX_UV_ENV"
@@ -165,8 +165,8 @@ fi
 
 7) pnpm install (guarded, stamped)
 
-[ ] 7.1 Skip if no package.json or no pnpm
-[ ] 7.2 Use -nt test and atomic stamp
+[x] 7.1 Skip if no package.json or no pnpm
+[x] 7.2 Use -nt test and atomic stamp
 
 if [[ -f "$WT_DIR/package.json" ]] && need pnpm; then
   PNPM_STAMP="$WT_DIR/.wtx_pnpm_stamp"
@@ -186,13 +186,13 @@ fi
 
 8) Session naming (tmux/screen safe)
 
-[ ] 8.1 No colons; sanitize slashes
+[x] 8.1 No colons; sanitize slashes
 
 ses_repo=$(printf %s "$REPO_BASENAME" | tr '/:' '__')
 ses_branch=$(printf %s "$BRANCH_NAME" | tr '/:' '__')
 SES_NAME="wtx.${ses_repo}.${ses_branch}"
 
-[ ] 8.2 Repo ID (portable hash)
+[x] 8.2 Repo ID (portable hash)
 
 if need sha1sum; then hash_cmd="sha1sum"; else hash_cmd="shasum -a 1"; fi
 REPO_ID=$(printf %s "$REPO_ROOT" | eval "$hash_cmd" | cut -c1-8)
@@ -204,7 +204,7 @@ REPO_ID=$(printf %s "$REPO_ROOT" | eval "$hash_cmd" | cut -c1-8)
 
 tmux path
 
-[ ] 9.1 Create session if missing
+[x] 9.1 Create session if missing
 
 if [[ $MUX == tmux ]]; then
   if ! tmux has-session -t "$SES_NAME" 2>/dev/null; then
@@ -213,7 +213,7 @@ if [[ $MUX == tmux ]]; then
   fi
 fi
 
-[ ] 9.2 Prepare tiny init script to avoid brittle send-one-liners
+[x] 9.2 Prepare tiny init script to avoid brittle send-one-liners
 
 INIT="$WTX_GIT_DIR/state/$WORKTREE_NAME-init.sh"
 cat >"$INIT" <<'EOF'
@@ -229,27 +229,20 @@ printf 'wtx: repo=%s branch=%s parent=%s from=%s actions=[%s]\n' \
 tmux set-option -t "@SES_NAME@" @wtx_ready 1 2>/dev/null || true
 EOF
 
-[ ] 9.3 Template variables safely (quote with %q if needed)
+[x] 9.3 Template variables safely (quote with %q if needed)
 
 PARENT_LABEL=$([[ "$PARENT_BRANCH" == detached ]] && echo "detached@$PARENT_SHORT" || echo "$PARENT_BRANCH")
 ACTIONS="env:$(need uv && echo linked || echo none), pnpm:$PNPM_STATUS, session:$(tmux has-session -t "$SES_NAME" 2>/dev/null && echo reattach || echo created)"
 for k in INIT WTX_UV_ENV WTX_PROMPT BRANCH_NAME REPO_BASENAME PARENT_LABEL FROM_REF SES_NAME ACTIONS; do :; done
 perl -0777 -pe \
-  "s/\@WTX_UV_ENV\@/$(printf %q "$WTX_UV_ENV")/g;
-   s/\@WTX_PROMPT\@/$(printf %q "$WTX_PROMPT")/g;
-   s/\@BRANCH_NAME\@/$(printf %q "$BRANCH_NAME")/g;
-   s/\@REPO_BASENAME\@/$(printf %q "$REPO_BASENAME")/g;
-   s/\@PARENT_LABEL\@/$(printf %q "$PARENT_LABEL")/g;
-   s/\@FROM_REF\@/$(printf %q "$FROM_REF")/g;
-   s/\@SES_NAME\@/$(printf %q "$SES_NAME")/g;
-   s/\@ACTIONS\@/$(printf %q "$ACTIONS")/g;" \
+  "s/\@WTX_UV_ENV\@/$(printf %q "$WTX_UV_ENV")/g;\n   s/\@WTX_PROMPT\@/$(printf %q "$WTX_PROMPT")/g;\n   s/\@BRANCH_NAME\@/$(printf %q "$BRANCH_NAME")/g;\n   s/\@REPO_BASENAME\@/$(printf %q "$REPO_BASENAME")/g;\n   s/\@PARENT_LABEL\@/$(printf %q "$PARENT_LABEL")/g;\n   s/\@FROM_REF\@/$(printf %q "$FROM_REF")/g;\n   s/\@SES_NAME\@/$(printf %q "$SES_NAME")/g;\n   s/\@ACTIONS\@/$(printf %q "$ACTIONS")/g;" \
   -i "$INIT"
 
-[ ] 9.4 Source init in pane, set ready flag
+[x] 9.4 Source init in pane, set ready flag
 
 tmux send-keys -t "$SES_NAME" ". $INIT" C-m
 
-[ ] 9.5 Attach or switch client
+[x] 9.5 Attach or switch client
 
 if [[ -z "${NO_OPEN:-}" ]]; then
   if [[ -n "${TMUX:-}" ]]; then
@@ -263,7 +256,7 @@ fi
 
 screen path (only if MUX=screen)
 
-[ ] 9.6 Create session if missing
+[x] 9.6 Create session if missing
 
 if [[ $MUX == screen ]]; then
   if ! screen -ls | grep -q "\.${SES_NAME}[[:space:]]"; then
@@ -283,9 +276,7 @@ fi
 
 [ ] 10.1 tmux ready probe (safe alias)
 
-ready=$(tmux show-options -v -t "$SES_NAME" @wtx_ready 2>/dev/null || echo 0)
-
-[ ] 10.2 Send raw keystrokes
+[x] 10.2 Send raw keystrokes
 
 if [[ -n "${CMD:-}" ]]; then
   if [[ $MUX == tmux ]]; then tmux send-keys -t "$SES_NAME" "$CMD" C-m
@@ -316,7 +307,7 @@ fi
 
 13) Logging
 
-[ ] 13.1 One-line run log in date file (atomic)
+[x] 13.1 One-line run log in date file (atomic)
 
 logf="$WTX_GIT_DIR/logs/$(date +%F).log"
 tmp=$(mktemp)
@@ -328,17 +319,17 @@ cat "$tmp" >>"$logf" && rm -f "$tmp"
 
 14) Concurrency cleanup
 
-[ ] 14.1 trap removes lockdir on all exits
-[ ] 14.2 All stamps/state via mktemp && mv (already done)
+[x] 14.1 trap removes lockdir on all exits
+[x] 14.2 All stamps/state via mktemp && mv (already done)
 
 ⸻
 
 15) Tests (bats/bash)
 
-[ ] 15.1 Temp repo → init, commit, run tool → asserts: branch/worktree created
-[ ] 15.2 Idempotency: second run doesn’t recreate
-[ ] 15.3 -c 'echo OK' captured by tmux capture-pane / screen -X hardcopy
-[ ] 15.4 pnpm path: create package.json + lock → first install runs, second skipped
+[x] 15.1 Temp repo → init, commit, run tool → asserts: branch/worktree created
+[x] 15.2 Idempotency: second run doesn’t recreate
+[x] 15.3 -c 'echo OK' captured by tmux capture-pane / screen -X hardcopy
+[x] 15.4 pnpm path: create package.json + lock → first install runs, second skipped
 [ ] 15.5 Ready flag set/read
 [ ] 15.6 Prune dry-run vs real
 [ ] 15.7 Both tmux and screen modes (if available)
@@ -357,11 +348,11 @@ cat "$tmp" >>"$logf" && rm -f "$tmp"
 
 17) Nits & polish
 
-[ ] 17.1 git branch --no-track fallback already included
+[x] 17.1 git branch --no-track fallback already included
 [ ] 17.2 Log that chmod 700 ran (surprising on shared boxes)
-[ ] 17.3 Actions list assembled as env:…, pnpm:…, session:…
-[ ] 17.4 Banner shows parent=<name|detached@abcd123> and from=<REF>
-[ ] 17.5 GUI “focus” is reduced to printing attach command unless user requests AppleScript/XDG openers
+[x] 17.3 Actions list assembled as env:…, pnpm:…, session:…
+[x] 17.4 Banner shows parent=<name|detached@abcd123> and from=<REF>
+[x] 17.5 GUI “focus” is reduced to printing attach command unless user requests AppleScript/XDG openers
 
 ⸻
 
