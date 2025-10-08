@@ -13,7 +13,7 @@ setup() {
   git -C "$REPO_ROOT" branch -M main >/dev/null
   export HOME="$TEST_ROOT/home"
   mkdir -p "$HOME"
-  export WTX_UV_ENV="$HOME/.wtx/uv-shared"
+  unset WTX_UV_ENV
   unset TMUX
 }
 
@@ -84,4 +84,53 @@ sanitize() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"actions=["* ]]
   [[ "$output" == *"session:"* ]]
+}
+
+@test "tmux ready flag set" {
+  run wtx ready-branch --no-open
+  [ "$status" -eq 0 ]
+  sleep 1
+  ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "ready-branch")"
+  run tmux show-option -t "$ses" -v @wtx_ready
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
+@test "uv env created once" {
+  mkdir -p "$TEST_ROOT/bin"
+  cat >"$TEST_ROOT/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "venv" ]; then
+  mkdir -p "$2/bin"
+  echo "venv" >>"$TEST_ROOT/uv_calls"
+  exit 0
+fi
+echo "unsupported" >&2
+exit 1
+EOF
+  chmod +x "$TEST_ROOT/bin/uv"
+  export PATH="$TEST_ROOT/bin:$PATH"
+  unset WTX_UV_ENV
+  run wtx uv-one --no-open
+  [ "$status" -eq 0 ]
+  run wtx uv-two --no-open
+  [ "$status" -eq 0 ]
+  calls=$(wc -l <"$TEST_ROOT/uv_calls")
+  [ "$calls" -eq 1 ]
+  repo_venv="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)/../.venv"
+  [ -d "$repo_venv/bin" ]
+}
+
+@test "git logging commits commands" {
+  branch="log-test"
+  run wtx "$branch" --no-open -c "echo ONE"
+  [ "$status" -eq 0 ]
+  run wtx "$branch" --no-open -c "echo TWO"
+  [ "$status" -eq 0 ]
+  count=$(git -C "$REPO_ROOT" log --pretty=%s "$branch" | grep -c '^WTX_COMMAND:')
+  [ "$count" -eq 2 ]
+  run wtx "$branch" --no-open --no-git-logging -c "echo THREE"
+  [ "$status" -eq 0 ]
+  count_after=$(git -C "$REPO_ROOT" log --pretty=%s "$branch" | grep -c '^WTX_COMMAND:')
+  [ "$count_after" -eq 2 ]
 }

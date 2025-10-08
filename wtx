@@ -3,223 +3,497 @@
 # Usage:
 #   wtx [NAME] [-c CMD] [--from REF] [--mux auto|tmux|screen] [--no-open]
 # Env:
-#   WTX_GIT_DIR (default: .git/wtx) | WTX_UV_ENV (default: $HOME/.wtx/uv-shared)
-#   WTX_MESSAGING_POLICY (unused placeholder) | WTX_PROMPT=1 to prefix PS1
-# Notes:
-#   - Prints a single-line banner in the first pane
-#   - Sends raw keystrokes if -c is provided (no eval)
-#   - Compatible with ancient macOS bash (3.2), no flock, no arrays required
+#   WTX_GIT_DIR (default: .git/wtx)
+#   WTX_UV_ENV (default: $(git rev-parse --git-common-dir)/../.venv)
+#   WTX_PROMPT=1 to prefix PS1
 
 set -euo pipefail
 IFS=$'\n\t'
 
 need() { command -v "$1" >/dev/null 2>&1; }
 
-# -------- args --------
-NAME=""
-CMD=""
-FROM_REF="HEAD"
-MUX="${MUX:-auto}"
-NO_OPEN=0
-VERBOSE=0
+tool_summary=""
+missing_tools=""
+append_tool_summary() {
+  if [ -z "$tool_summary" ]; then
+    tool_summary="tools: $1"
+  else
+    tool_summary="$tool_summary $1"
+  fi
+}
 
-print_help() {
-  cat <<EOF
+record_missing() {
+  if [ -z "$missing_tools" ]; then
+    missing_tools="$1"
+  else
+    missing_tools="$missing_tools $1"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
 wtx — create/reuse a git worktree and open a tmux/screen session with a one-line banner.
 
-Usage: wtx [NAME] [-c CMD] [--from REF] [--mux auto|tmux|screen] [--no-open] [--verbose]
+Usage: wtx [NAME] [-c CMD] [--from REF] [--mux auto|tmux|screen] [--no-open]
+            [--dry-run] [--verbose] [--delete-branches] [--no-git-logging]
+            [--_post-commit]
 Examples:
   wtx                       # auto-name branch wtx/<parent>-NN, create worktree + session
   wtx feature-xyz -c 'pytest -q'   # send raw keystrokes after session is ready
   wtx --mux screen          # use GNU screen if you prefer
 
 Flags:
-  -c CMD         Send raw keystrokes to pane (exactly, then Enter)
-  --from REF     Use REF as starting point (default: HEAD)
-  --mux MODE     auto|tmux|screen   (default: auto)
-  --no-open      Do not attach/switch to the session; only print attach command
-  --verbose      Print extra diagnostics
-  -h|--help      This help
+  -c CMD            Send raw keystrokes to pane (exactly, then Enter)
+  --from REF        Use REF as starting point (default: HEAD)
+  --mux MODE        auto|tmux|screen   (default: auto)
+  --no-open         Do not attach/switch to the session; only print attach command
+  --dry-run         Ignored (reserved for wtx-prune)
+  --delete-branches Ignored (reserved for wtx-prune)
+  --verbose         Print extra diagnostics to stderr
+  --no-git-logging  Disable git commit logging for spinup/-c
+  --_post-commit    Internal: invoked by git hook to broadcast commit messages
+  --help            This help message
 EOF
 }
 
-# manual arg parse for long flags (bash 3.2 getopts has no long support)
+NAME=""
+CMD=""
+FROM_REF="HEAD"
+MUX="${MUX:-auto}"
+NO_OPEN=0
+VERBOSE=0
+GIT_LOGGING=1
+INTERNAL_POST_COMMIT=0
+CLOSE_MODE=""
+DRY_RUN_FLAG=0
+DELETE_BRANCHES_FLAG=0
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    -h|--help) print_help; exit 0 ;;
-    -c) shift; CMD="${1:-}"; [ -z "${CMD}" ] && { echo "Missing argument for -c"; exit 2; } ;;
-    --from) shift; FROM_REF="${1:-HEAD}" ;;
-    --mux) shift; MUX="${1:-auto}" ;;
-    --no-open) NO_OPEN=1 ;;
-    --verbose) VERBOSE=1 ;;
-    --*) echo "Unknown option: $1"; exit 2 ;;
-    *) if [ -z "$NAME" ]; then NAME="$1"; else echo "Unexpected arg: $1"; exit 2; fi ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -c)
+      shift
+      CMD="${1:-}"
+      if [ -z "$CMD" ]; then
+        echo "Missing argument for -c" >&2
+        exit 64
+      fi
+      ;;
+    --from)
+      shift
+      FROM_REF="${1:-HEAD}"
+      ;;
+    --mux)
+      shift
+      MUX="${1:-auto}"
+      ;;
+    --no-open)
+      NO_OPEN=1
+      ;;
+    --dry-run)
+      DRY_RUN_FLAG=1
+      ;;
+    --delete-branches)
+      DELETE_BRANCHES_FLAG=1
+      ;;
+    --verbose)
+      VERBOSE=1
+      ;;
+    --no-git-logging)
+      GIT_LOGGING=0
+      ;;
+    --_post-commit)
+      INTERNAL_POST_COMMIT=1
+      ;;
+    --close|--close-merge|--close-force)
+      echo "Close workflow is not implemented yet." >&2
+      exit 78
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      exit 64
+      ;;
+    *)
+      if [ -z "$NAME" ]; then
+        NAME="$1"
+      else
+        echo "Unexpected arg: $1" >&2
+        usage
+        exit 64
+      fi
+      ;;
   esac
   shift
 done
 
-# -------- repo info --------
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Not inside a git repo"; exit 1; }
+case "$MUX" in
+  auto|tmux|screen) ;;
+  *) echo "Invalid mux backend: $MUX" >&2; exit 64 ;;
+esac
+
+check_required_tools() {
+  local have_tmux=0
+  local have_screen=0
+
+  if need git; then
+    append_tool_summary "git:ok"
+  else
+    append_tool_summary "git:miss"
+    record_missing git
+  fi
+
+  if need tmux; then
+    have_tmux=1
+    append_tool_summary "tmux:ok"
+  else
+    append_tool_summary "tmux:miss"
+  fi
+
+  if need screen; then
+    have_screen=1
+    append_tool_summary "screen:ok"
+  else
+    if [ $have_tmux -eq 1 ]; then
+      append_tool_summary "screen:skip"
+    else
+      append_tool_summary "screen:miss"
+    fi
+  fi
+
+  if need uv; then
+    append_tool_summary "uv:ok"
+  else
+    append_tool_summary "uv:miss"
+  fi
+
+  if need pnpm; then
+    append_tool_summary "pnpm:ok"
+  else
+    append_tool_summary "pnpm:miss"
+  fi
+
+  if [ $have_tmux -eq 0 ] && [ $have_screen -eq 0 ]; then
+    record_missing "tmux|screen"
+  fi
+
+  if [ -n "$tool_summary" ]; then
+    printf '%s\n' "$tool_summary" >&2
+  fi
+
+  if [ -n "$missing_tools" ]; then
+    printf '[wtx] missing required tools: %s\n' "$missing_tools" >&2
+    exit 2
+  fi
+}
+
+check_required_tools
+
+if [ "$MUX" = "tmux" ] && ! need tmux; then
+  echo "tmux backend requested but tmux not available." >&2
+  exit 2
+fi
+
+if [ "$MUX" = "screen" ] && ! need screen; then
+  echo "screen backend requested but screen not available." >&2
+  exit 2
+fi
+
+export NAME CMD NO_OPEN MUX FROM_REF CLOSE_MODE GIT_LOGGING INTERNAL_POST_COMMIT
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Not inside a git repo" >&2; exit 1; }
 GIT_DIR=$(git rev-parse --git-dir)
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
 REPO_BASENAME=$(basename "$REPO_ROOT")
 
-# -------- defaults & dirs --------
 WTX_GIT_DIR=${WTX_GIT_DIR:-"$GIT_DIR/wtx"}
-WTX_UV_ENV=${WTX_UV_ENV:-"$HOME/.wtx/uv-shared"}
-WTX_MESSAGING_POLICY=${WTX_MESSAGING_POLICY:-parent,children}
 WTX_PROMPT=${WTX_PROMPT:-0}
+DEFAULT_UV_ENV="$GIT_COMMON_DIR/../.venv"
+WTX_UV_ENV=${WTX_UV_ENV:-"$DEFAULT_UV_ENV"}
 
 case "$WTX_GIT_DIR" in
   /*) WTX_GIT_DIR_ABS="$WTX_GIT_DIR" ;;
   *) WTX_GIT_DIR_ABS="$REPO_ROOT/$WTX_GIT_DIR" ;;
 esac
 
-mkdir -p "$WTX_GIT_DIR_ABS"/logs "$WTX_GIT_DIR_ABS"/locks "$WTX_GIT_DIR_ABS"/state
-chmod 700 "$WTX_GIT_DIR_ABS" || true
-
-# -------- mux select --------
-if [ "$MUX" = "auto" ]; then
-  if need tmux; then MUX=tmux
-  elif need screen; then MUX=screen
-  else echo "Need tmux or screen installed."; exit 2; fi
-fi
-[ $VERBOSE -eq 1 ] && echo "[wtx] mux=$MUX"
-
-# -------- parent & branch naming --------
-PARENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)
-PARENT_SHA=$(git rev-parse "$FROM_REF")
-PARENT_SHORT=$(git rev-parse --short "$PARENT_SHA")
-
-# portable lock (no flock)
-lock_key=$(printf %s "$PARENT_BRANCH" | tr "/:" "__")
-lockdir="$WTX_GIT_DIR_ABS/locks/${lock_key}.lockdir"
-while ! mkdir "$lockdir" 2>/dev/null; do sleep 0.05; done
-cleanup_lock() { rmdir "$lockdir" 2>/dev/null || true; }
-trap cleanup_lock EXIT
-
-if [ -z "$NAME" ]; then
-  existing=$(git for-each-ref --format='%(refname:short)' "refs/heads/wtx/${PARENT_BRANCH}-*" 2>/dev/null | \
-             grep -E "^wtx/${PARENT_BRANCH}-[0-9]+$" || true)
-  last=$(echo "$existing" | sed -E 's/.*-([0-9]+)$/\1/' | sort -n | tail -1 || true)
-  if [ -z "$last" ]; then NN=1; else NN=$(( last + 1 )); fi
-  BRANCH_NAME="wtx/${PARENT_BRANCH}-${NN}"
-else
-  BRANCH_NAME="$NAME"
+if [ -n "$WTX_UV_ENV" ]; then
+  case "$WTX_UV_ENV" in
+    /*) : ;;
+    *) WTX_UV_ENV="$REPO_ROOT/$WTX_UV_ENV" ;;
+  esac
 fi
 
-WORKTREE_NAME=$(printf %s "$BRANCH_NAME" | tr '/:' '__')
-
-# -------- ensure branch exists --------
-if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-  git branch "$BRANCH_NAME" "$FROM_REF" 2>/dev/null || git branch --no-track "$BRANCH_NAME" "$FROM_REF"
+mkdir -p "$WTX_GIT_DIR_ABS" "$WTX_GIT_DIR_ABS/logs" "$WTX_GIT_DIR_ABS/locks" "$WTX_GIT_DIR_ABS/state"
+PERM_STAMP="$WTX_GIT_DIR_ABS/.perm_stamp"
+if [ ! -f "$PERM_STAMP" ]; then
+  chmod 700 "$WTX_GIT_DIR_ABS" || true
+  : >"$PERM_STAMP"
+  printf '[wtx] secured permissions on %s\n' "$WTX_GIT_DIR_ABS" >&2
 fi
 
-# description (safe)
-desc="wtx: created_by=wtx
-wtx: parent_branch=${PARENT_BRANCH}
-wtx: from_ref=${FROM_REF}"
-git config "branch.$BRANCH_NAME.description" "$desc" || true
+WT_STATE_DIR="$WTX_GIT_DIR_ABS/state"
 
-# tiny state JSON
-state="$WTX_GIT_DIR_ABS/state/$WORKTREE_NAME.json"
-tmp=$(mktemp "$WTX_GIT_DIR_ABS/tmp.XXXXXX")
-printf '{"created_by":"wtx","parent_branch":"%s","from_ref":"%s"}\n' "$PARENT_BRANCH" "$FROM_REF" >"$tmp"
-mv "$tmp" "$state"
+sanitize_name() { printf '%s' "$1" | tr '/:' '__'; }
 
-# -------- worktree ensure --------
-WORKTREE_ROOT="$(dirname "$REPO_ROOT")/${REPO_BASENAME}.worktrees"
-WT_DIR="$WORKTREE_ROOT/$WORKTREE_NAME"
-mkdir -p "$WORKTREE_ROOT"
-
-# repair zombies if any
-if [ -d "$WT_DIR" ] && ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
-  git -C "$REPO_ROOT" worktree prune || true
-fi
-
-if ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
-  git -C "$REPO_ROOT" worktree add "$WT_DIR" "$BRANCH_NAME"
-fi
-
-# -------- shared uv env (optional) --------
-ENV_ACTION="none"
-if need uv; then
-  if [ ! -d "$WTX_UV_ENV" ]; then
-    uv venv "$WTX_UV_ENV"
-  fi
-  ENV_ACTION="linked"
-fi
-
-# -------- pnpm install (optional) --------
-PNPM_STATUS="none"
-if [ -f "$WT_DIR/package.json" ] && need pnpm; then
-  PNPM_STAMP="$WT_DIR/.wtx_pnpm_stamp"
-  if [ ! -d "$WT_DIR/node_modules" ] || { [ -f "$WT_DIR/pnpm-lock.yaml" ] && [ "$WT_DIR/pnpm-lock.yaml" -nt "$PNPM_STAMP" ]; }; then
-    ( cd "$WT_DIR" && pnpm install --frozen-lockfile )
-    tmp=$(mktemp "$WT_DIR/.wtx_pnpm.XXXXXX") && date +%s >"$tmp" && mv "$tmp" "$PNPM_STAMP"
-    PNPM_STATUS="installed"
-  else
-    PNPM_STATUS="skipped"
-  fi
-fi
-
-# -------- session naming & repo id --------
-ses_repo=$(printf %s "$REPO_BASENAME" | tr '/:' '__')
-ses_branch=$(printf %s "$BRANCH_NAME" | tr '/:' '__')
-SES_NAME="wtx_${ses_repo}_${ses_branch}"
-
-if need sha1sum; then
-  REPO_ID=$(printf %s "$REPO_ROOT" | sha1sum | cut -c1-8)
-else
-  REPO_ID=$(printf %s "$REPO_ROOT" | shasum -a 1 | awk '{print $1}' | cut -c1-8)
-fi
-
-# -------- banner values --------
-if [ "$PARENT_BRANCH" = "detached" ]; then
-  PARENT_LABEL="detached@${PARENT_SHORT}"
-else
-  PARENT_LABEL="$PARENT_BRANCH"
-fi
-ACTIONS="env:${ENV_ACTION}, pnpm:${PNPM_STATUS}"
-attach_cmd=""
-
-# reusable init script (sourced inside tmux/screen)
-INIT="$WTX_GIT_DIR_ABS/state/wtx-init.sh"
-if [ ! -f "$INIT" ]; then
-  cat >"$INIT" <<'EOF'
-# wtx init (sourced inside tmux/screen); relies on env vars set via inline exports.
+install_init_template() {
+  local init="$WT_STATE_DIR/wtx-init.sh"
+  if [ ! -f "$init" ]; then
+    cat >"$init" <<'INIT'
+# wtx init (sourced inside tmux/screen)
 if [ -n "${WTX_UV_ENV:-}" ] && [ -d "$WTX_UV_ENV/bin" ]; then
-  PATH="$WTX_UV_ENV/bin:$PATH"
+  case ":$PATH:" in
+    *:"$WTX_UV_ENV/bin":*) : ;;
+    *) PATH="$WTX_UV_ENV/bin:$PATH" ;;
+  esac
   export PATH
 fi
 if [ "${WTX_PROMPT:-0}" = "1" ]; then
   PS1="[wtx:${BRANCH_NAME}] $PS1"
 fi
-printf 'wtx: repo=%s branch=%s parent=%s from=%s actions=[%s]\n' \
-  "${REPO_BASENAME:-?}" "${BRANCH_NAME:-?}" "${PARENT_LABEL:-?}" "${FROM_REF:-?}" "${ACTIONS:-?}"
-tmux set-option -t "$(tmux display-message -p '#S' 2>/dev/null)" @wtx_ready 1 2>/dev/null || true
-EOF
+printf 'wtx: repo=%s branch=%s parent=%s from=%s actions=[%s]\n' "${REPO_BASENAME:-?}" "${BRANCH_NAME:-?}" "${PARENT_LABEL:-?}" "${FROM_REF:-?}" "${ACTIONS:-?}"
+if command -v tmux >/dev/null 2>&1 && [ -n "${SES_NAME:-}" ]; then
+  tmux set-option -t "$SES_NAME" @wtx_ready 1 2>/dev/null || true
+fi
+if [ -n "${READY_FILE:-}" ]; then
+  : >"$READY_FILE"
+fi
+INIT
+  fi
+  INIT="$init"
+}
+
+install_init_template
+INIT="$WT_STATE_DIR/wtx-init.sh"
+
+wtx_tmux_ready() { tmux show-option -t "$SES_NAME" -v @wtx_ready 2>/dev/null | grep -q '^1$'; }
+wait_for_tmux_ready() {
+  local i=0
+  while [ $i -lt 5 ]; do
+    if wtx_tmux_ready; then
+      return 0
+    fi
+    sleep 0.04
+    i=$(( i + 1 ))
+  done
+  return 1
+}
+wait_for_screen_ready() {
+  local i=0
+  while [ $i -lt 5 ]; do
+    if [ -n "$READY_FILE" ] && [ -f "$READY_FILE" ]; then
+      return 0
+    fi
+    sleep 0.04
+    i=$(( i + 1 ))
+  done
+  return 1
+}
+
+sanitize_commit_payload() {
+  local payload="$1"
+  payload=${payload//$'\n'/ }
+  payload=$(printf '%s' "$payload" | tr '\000-\037' ' ')
+  printf '%s' "${payload:0:200}"
+}
+
+run_git_log_commit() {
+  local message="$1"
+  if [ $GIT_LOGGING -eq 0 ]; then
+    return
+  fi
+  git -C "$WT_DIR" commit --allow-empty -m "$message" >/dev/null 2>&1 || true
+}
+
+if need sha1sum; then
+  REPO_ID=$(printf '%s' "$REPO_ROOT" | sha1sum | awk '{print $1}' | cut -c1-8)
+else
+  REPO_ID=$(printf '%s' "$REPO_ROOT" | shasum -a 1 | awk '{print $1}' | cut -c1-8)
 fi
 
-q() { printf %q "$1"; }
+PARENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)
+PARENT_SHA=$(git rev-parse "$FROM_REF")
+PARENT_SHORT=$(git rev-parse --short "$PARENT_SHA")
 
-# -------- tmux path --------
+lock_key=$(sanitize_name "$PARENT_BRANCH")
+lockdir="$WTX_GIT_DIR_ABS/locks/${lock_key}.lockdir"
+while ! mkdir "$lockdir" 2>/dev/null; do
+  if [ -d "$lockdir" ]; then
+    stale_age=$(python - "$lockdir" <<'PY'
+import os
+import sys
+import time
+
+lock_path = sys.argv[1]
+if not os.path.exists(lock_path):
+    raise SystemExit(0)
+age = time.time() - os.stat(lock_path).st_mtime
+if age >= 30:
+    print(int(age))
+PY
+)
+    if [ -n "$stale_age" ]; then
+      printf '[wtx] stale numbering lock for %s (age %ss); stealing.\n' "$PARENT_BRANCH" "$stale_age" >&2
+      rm -rf "$lockdir"
+      continue
+    fi
+  fi
+  sleep 0.05
+done
+cleanup_lock() { rmdir "$lockdir" 2>/dev/null || true; }
+trap cleanup_lock EXIT
+
+if [ -z "$NAME" ]; then
+  existing=$(git for-each-ref --format='%(refname:short)' "refs/heads/wtx/${PARENT_BRANCH}-*" 2>/dev/null | grep -E "^wtx/${PARENT_BRANCH}-[0-9]+$" || true)
+  last=$(printf '%s\n' "$existing" | sed -E 's/.*-([0-9]+)$/\1/' | sort -n | tail -1 || printf '0')
+  if [ -z "$last" ]; then
+    NN=1
+  else
+    NN=$(( last + 1 ))
+  fi
+  BRANCH_NAME="wtx/${PARENT_BRANCH}-${NN}"
+else
+  BRANCH_NAME="$NAME"
+fi
+
+WORKTREE_NAME=$(sanitize_name "$BRANCH_NAME")
+READY_FILE="$WT_STATE_DIR/$WORKTREE_NAME.ready"
+rm -f "$READY_FILE" 2>/dev/null || true
+
+if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+  git branch "$BRANCH_NAME" "$FROM_REF" 2>/dev/null || git branch --no-track "$BRANCH_NAME" "$FROM_REF"
+fi
+
+desc="wtx: created_by=wtx\nwtx: parent_branch=${PARENT_BRANCH}\nwtx: from_ref=${FROM_REF}"
+git config "branch.$BRANCH_NAME.description" "$desc" >/dev/null 2>&1 || true
+
+state_json="$WT_STATE_DIR/$WORKTREE_NAME.json"
+tmp_json=$(mktemp "$WTX_GIT_DIR_ABS/tmp.state.XXXXXX")
+printf '{"created_by":"wtx","branch":"%s","parent_branch":"%s","from_ref":"%s"}\n' \
+  "$BRANCH_NAME" "$PARENT_BRANCH" "$FROM_REF" >"$tmp_json"
+mv "$tmp_json" "$state_json"
+
+WORKTREE_ROOT="$(dirname "$REPO_ROOT")/${REPO_BASENAME}.worktrees"
+WT_DIR="$WORKTREE_ROOT/$WORKTREE_NAME"
+mkdir -p "$WORKTREE_ROOT"
+
+if [ -d "$WT_DIR" ] && ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
+  git -C "$REPO_ROOT" worktree prune || true
+fi
+
+WORKTREE_STATUS="reused"
+if ! git -C "$REPO_ROOT" worktree list --porcelain | grep -q "worktree $WT_DIR"; then
+  git -C "$REPO_ROOT" worktree add "$WT_DIR" "$BRANCH_NAME"
+  WORKTREE_STATUS="created"
+fi
+
+ENV_STATUS="missing"
+if [ -n "$WTX_UV_ENV" ] && need uv; then
+  mkdir -p "$(dirname "$WTX_UV_ENV")"
+  if [ -d "$WTX_UV_ENV/bin" ]; then
+    ENV_STATUS="reused"
+  else
+    uv venv "$WTX_UV_ENV"
+    ENV_STATUS="created"
+  fi
+elif [ -z "$WTX_UV_ENV" ]; then
+  ENV_STATUS="skipped"
+fi
+
+PNPM_STATUS="skipped"
+if [ -f "$WT_DIR/package.json" ]; then
+  if need pnpm; then
+    PNPM_STATUS="reused"
+    PNPM_STAMP="$WT_DIR/.wtx_pnpm_stamp"
+    if [ ! -d "$WT_DIR/node_modules" ] || { [ -f "$WT_DIR/pnpm-lock.yaml" ] && [ "$WT_DIR/pnpm-lock.yaml" -nt "$PNPM_STAMP" ]; }; then
+      ( cd "$WT_DIR" && pnpm install --frozen-lockfile )
+      tmp_stamp=$(mktemp "$WT_DIR/.wtx_pnpm.XXXXXX")
+      date +%s >"$tmp_stamp"
+      mv "$tmp_stamp" "$PNPM_STAMP"
+      PNPM_STATUS="created"
+    fi
+  else
+    PNPM_STATUS="missing"
+  fi
+fi
+
+ses_repo=$(sanitize_name "$REPO_BASENAME")
+ses_branch=$(sanitize_name "$BRANCH_NAME")
+SES_NAME="wtx_${ses_repo}_${ses_branch}"
+
+if [ "$PARENT_BRANCH" = "detached" ]; then
+  PARENT_LABEL="detached@${PARENT_SHORT}"
+else
+  PARENT_LABEL="$PARENT_BRANCH"
+fi
+
+if [ "$MUX" = "auto" ]; then
+  if need tmux; then
+    MUX=tmux
+  elif need screen; then
+    MUX=screen
+  fi
+fi
+
+SESSION_STATUS="reused"
 if [ "$MUX" = "tmux" ]; then
   if ! tmux has-session -t "$SES_NAME" 2>/dev/null; then
     tmux new-session -d -s "$SES_NAME" -c "$WT_DIR"
-    tmux set-option -t "$SES_NAME" @wtx_repo_id "$REPO_ID"
-    session_action="created"
-  else
-    session_action="reattach"
+    SESSION_STATUS="created"
   fi
+  tmux set-option -t "$SES_NAME" @wtx_repo_id "$REPO_ID" 2>/dev/null || true
+  tmux set-option -t "$SES_NAME" @wtx_branch "$BRANCH_NAME" 2>/dev/null || true
+fi
 
-  ACTIONS_WITH_SESSION="$ACTIONS, session:${session_action}"
-  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS_WITH_SESSION") WTX_PROMPT=$(q "$WTX_PROMPT")"
-  tmux send-keys -t "$SES_NAME" "$env_line . $(q "$INIT")" C-m
+if [ "$MUX" = "screen" ]; then
+  if ! screen -ls | grep -q "\.${SES_NAME}[[:space:]]"; then
+    screen -dmS "$SES_NAME" sh -c "cd $(printf %q "$WT_DIR"); exec \$SHELL"
+    SESSION_STATUS="created"
+  fi
+fi
 
-  if [ -n "$CMD" ]; then
+OPEN_STATUS="spawned"
+if [ $NO_OPEN -eq 1 ]; then
+  OPEN_STATUS="suppressed"
+fi
+
+ACTIONS="env:${ENV_STATUS}, pnpm:${PNPM_STATUS}, session:${SESSION_STATUS}, open:${OPEN_STATUS}"
+
+build_env_exports() {
+  printf 'WTX_UV_ENV=%q REPO_BASENAME=%q BRANCH_NAME=%q PARENT_LABEL=%q FROM_REF=%q ACTIONS=%q WTX_PROMPT=%q READY_FILE=%q SES_NAME=%q' "$WTX_UV_ENV" "$REPO_BASENAME" "$BRANCH_NAME" "$PARENT_LABEL" "$FROM_REF" "$ACTIONS" "$WTX_PROMPT" "$READY_FILE" "$SES_NAME"
+}
+
+if [ "$MUX" = "tmux" ]; then
+  env_exports=$(build_env_exports)
+  tmux send-keys -t "$SES_NAME" "$env_exports . $(printf %q "$INIT")" C-m
+fi
+
+if [ "$MUX" = "screen" ]; then
+  env_exports=$(build_env_exports)
+  screen -S "$SES_NAME" -p 0 -X stuff "$env_exports . $(printf %q "$INIT")$(printf '\r')"
+fi
+
+if [ "$WORKTREE_STATUS" = "created" ]; then
+  run_git_log_commit "WTX_SPINUP: branch=$BRANCH_NAME from=$FROM_REF"
+fi
+
+if [ -n "$CMD" ]; then
+  run_git_log_commit "WTX_COMMAND: $(sanitize_commit_payload "$CMD")"
+fi
+
+if [ -n "$CMD" ]; then
+  if [ "$MUX" = "tmux" ]; then
+    wait_for_tmux_ready || true
     tmux send-keys -t "$SES_NAME" "$CMD" C-m
+  else
+    wait_for_screen_ready || true
+    screen -S "$SES_NAME" -p 0 -X stuff "$CMD$(printf '\r')"
   fi
+fi
 
+attach_cmd=""
+if [ "$MUX" = "tmux" ]; then
   if [ $NO_OPEN -eq 0 ]; then
     if [ -n "${TMUX:-}" ]; then
       tmux switch-client -t "$SES_NAME"
@@ -229,44 +503,23 @@ if [ "$MUX" = "tmux" ]; then
   else
     attach_cmd="tmux attach -t '$SES_NAME'"
   fi
-
-  ACTIONS="$ACTIONS_WITH_SESSION"
 fi
 
-# -------- screen path --------
 if [ "$MUX" = "screen" ]; then
-  if ! screen -ls | grep -q "\.${SES_NAME}[[:space:]]"; then
-    screen -dmS "$SES_NAME" sh -c "cd $(printf %q "$WT_DIR"); exec \$SHELL"
-    session_action="created"
-  else
-    session_action="reattach"
-  fi
-
-  ACTIONS_WITH_SESSION="$ACTIONS, session:${session_action}"
-  env_line="WTX_UV_ENV=$(q "$WTX_UV_ENV") REPO_BASENAME=$(q "$REPO_BASENAME") BRANCH_NAME=$(q "$BRANCH_NAME") PARENT_LABEL=$(q "$PARENT_LABEL") FROM_REF=$(q "$FROM_REF") ACTIONS=$(q "$ACTIONS_WITH_SESSION") WTX_PROMPT=$(q "$WTX_PROMPT")"
-  screen -S "$SES_NAME" -p 0 -X stuff "$env_line . $(q "$INIT")$(printf '\r')"
-
-  if [ -n "$CMD" ]; then
-    screen -S "$SES_NAME" -p 0 -X stuff "$CMD$(printf '\r')"
-  fi
-
   if [ $NO_OPEN -eq 0 ]; then
     screen -r "$SES_NAME"
   else
     attach_cmd="screen -r '$SES_NAME'"
   fi
-
-  ACTIONS="$ACTIONS_WITH_SESSION"
 fi
 
-# -------- logging --------
 logf="$WTX_GIT_DIR_ABS/logs/$(date +%F).log"
-tmp=$(mktemp "$WTX_GIT_DIR_ABS/tmp.XXXXXX")
-printf '%s %s actions=[%s]\n' "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$BRANCH_NAME" "$ACTIONS" >>"$tmp"
-cat "$tmp" >>"$logf" || true
-rm -f "$tmp" || true
+tmp_log=$(mktemp "$WTX_GIT_DIR_ABS/tmp.log.XXXXXX")
+printf '%s %s actions=[%s]\n' "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$BRANCH_NAME" "$ACTIONS" >>"$tmp_log"
+cat "$tmp_log" >>"$logf" || true
+rm -f "$tmp_log" || true
 
-# -------- final message if not attached --------
 if [ -n "$attach_cmd" ]; then
-  echo "[wtx] Attach with: $attach_cmd"
+  printf '[wtx] Attach with: %s\n' "$attach_cmd"
 fi
+
