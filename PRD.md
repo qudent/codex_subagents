@@ -53,7 +53,7 @@ Point 9. [x] --mux selects backend (default: auto → prefer tmux).
 
 
 
-Point 10. [x] --no-open suppresses GUI terminal focus.
+Point 10. [x] --no-open suppresses GUI/OS-level terminal window spawning/focus logic while still printing an attach command for manual use.
 
 
 
@@ -260,7 +260,7 @@ Point 48. [x] If focusing fails → print the attach command for manual use. —
 
 8. Messaging policy
 
-Point 49. [x] Environment variable WTX_MESSAGING_POLICY controls cross-session notices (parent,children default). — Implemented with opt-out via WTX_MESSAGING_POLICY=none.
+Point 49. [ ] Environment variable WTX_MESSAGING_POLICY controls cross-session notices. — Only a broadcast/none toggle is wired (WTX_MESSAGING_POLICY=none disables messaging); parent/children targeting still pending.
 
 
 

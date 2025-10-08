@@ -566,7 +566,7 @@ logf="$WTX_GIT_DIR_ABS/logs/$(date +%F).log"
 tmp=$(mktemp "$WTX_GIT_DIR_ABS/tmp.XXXXXX")
 printf '%s %s actions=[%s]\n' "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$BRANCH_NAME" "$ACTIONS" >>"$tmp"
 cat "$tmp" >>"$logf" || true
-rm -f "$tmp"
+rm -f "$tmp" || true
 
 if [ -n "$attach_cmd" ]; then
   echo "[wtx] Attach with: $attach_cmd"
