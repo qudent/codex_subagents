@@ -62,6 +62,20 @@ wtx::compute_session_name() {
   SES_NAME="wtx_${ses_repo}_${ses_branch}"
 }
 
+wtx::compute_attach_command() {
+  case "$MUX" in
+    tmux)
+      ATTACH_COMMAND="tmux attach -t $SES_NAME"
+      ;;
+    screen)
+      ATTACH_COMMAND="screen -r $SES_NAME"
+      ;;
+    *)
+      ATTACH_COMMAND=""
+      ;;
+  esac
+}
+
 wtx::launch_tmux_session() {
   SESSION_STATUS="reused"
   if ! tmux has-session -t "$SES_NAME" 2>/dev/null; then
@@ -94,6 +108,25 @@ wtx::launch_session() {
       SESSION_STATUS="skipped"
       ;;
   esac
+}
+
+wtx::maybe_spawn_window() {
+  OPEN_STATUS="suppressed"
+  if [ $NO_OPEN -ne 0 ]; then
+    return 1
+  fi
+
+  if [ -z "$ATTACH_COMMAND" ]; then
+    OPEN_STATUS="failed"
+    return 1
+  fi
+
+  if wtx::open_session_window "$ATTACH_COMMAND"; then
+    return 0
+  fi
+
+  OPEN_STATUS="failed"
+  return 1
 }
 
 wtx::build_env_exports() {
@@ -156,30 +189,6 @@ wtx::dispatch_command() {
   esac
 }
 
-wtx::attach_session() {
-  ATTACH_COMMAND=""
-  case "$MUX" in
-    tmux)
-      if [ $NO_OPEN -eq 0 ]; then
-        if [ -n "${TMUX:-}" ]; then
-          tmux switch-client -t "$SES_NAME"
-        else
-          tmux attach -t "$SES_NAME"
-        fi
-      else
-        ATTACH_COMMAND="tmux attach -t '$SES_NAME'"
-      fi
-      ;;
-    screen)
-      if [ $NO_OPEN -eq 0 ]; then
-        screen -r "$SES_NAME"
-      else
-        ATTACH_COMMAND="screen -r '$SES_NAME'"
-      fi
-      ;;
-  esac
-}
-
 wtx::write_log_entry() {
   local logf tmp_log
   logf="$WTX_GIT_DIR_ABS/logs/$(date +%F).log"
@@ -217,11 +226,9 @@ wtx::main() {
   wtx::install_post_commit_hook
   wtx::resolve_backend
   wtx::launch_session
+  wtx::compute_attach_command
 
-  OPEN_STATUS="suppressed"
-  if [ $NO_OPEN -eq 0 ]; then
-    OPEN_STATUS="spawned"
-  fi
+  wtx::maybe_spawn_window || true
   ACTIONS="env:${ENV_STATUS}, pnpm:${PNPM_STATUS}, session:${SESSION_STATUS}, open:${OPEN_STATUS}"
 
   wtx::send_init_to_session
@@ -236,7 +243,6 @@ wtx::main() {
 
   wtx::dispatch_command
   wtx::write_log_entry
-  wtx::attach_session
 
   if [ -n "$ATTACH_COMMAND" ]; then
     printf '[wtx] Attach with: %s\n' "$ATTACH_COMMAND"

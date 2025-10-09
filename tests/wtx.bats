@@ -15,6 +15,7 @@ setup() {
   mkdir -p "$HOME"
   unset WTX_UV_ENV
   unset TMUX
+  unset WTX_OPEN_STRATEGY
   export WTX_BIN="$BATS_TEST_DIRNAME/../wtx"
 }
 
@@ -142,6 +143,28 @@ EOF
   [ "$status" -eq 0 ]
   count_after=$(git -C "$REPO_ROOT" log --pretty=%s "$branch" | grep -c '^WTX_COMMAND:')
   [ "$count_after" -eq 2 ]
+}
+
+@test "print strategy suppresses GUI open" {
+  export WTX_OPEN_STRATEGY=print
+  run wtx gui-print
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]
+  log_file="$REPO_ROOT/.git/wtx/logs/$(date +%F).log"
+  run tail -n 1 "$log_file"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"open:suppressed"* ]]
+}
+
+@test "failed GUI strategy falls back to attach instructions" {
+  export WTX_OPEN_STRATEGY=nonexistent
+  run wtx gui-fallback
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]
+  log_file="$REPO_ROOT/.git/wtx/logs/$(date +%F).log"
+  run tail -n 1 "$log_file"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"open:failed"* ]]
 }
 
 @test "post-commit hook installs and broadcasts to parent" {

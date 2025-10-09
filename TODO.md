@@ -161,13 +161,13 @@ Legend
 [ ] 17.2 Log chmod 700 (only first time) → detection via test -d + ! -f .perm_stamp
 [ ] 17.3 Output normalization: each resource emits status created|reused|skipped|missing
 [ ] 17.4 Performance timing instrumentation (P69–P71): record ms for phases (enable with --verbose)
-[ ] 17.5 open=spawned|suppressed|failed token added to banner actions list (after GUI implemented)
+[x] 17.5 open=spawned|suppressed|failed token added to banner actions list (after GUI implemented)
 [ ] 17.6 Deterministic banner ordering: env, pnpm, session, open, timing(optional)
 
 ⸻
 Future (deferred features kept brief)
   • Close workflow (--close*, merge) — separate spec
-  • GUI window spawn strategies (macOS AppleScript, iTerm2, kitty, etc.)
+  • GUI window spawn strategies (macOS AppleScript, iTerm2, kitty, etc.) — completed
   • --debug verbose categories (timing, decisions)
   • Notifications (macOS / Linux)
 

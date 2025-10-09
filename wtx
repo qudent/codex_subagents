@@ -10,6 +10,7 @@ source "$SCRIPT_DIR/lib/wtx/common.sh"
 source "$SCRIPT_DIR/lib/wtx/cli.sh"
 source "$SCRIPT_DIR/lib/wtx/repo.sh"
 source "$SCRIPT_DIR/lib/wtx/worktree.sh"
+source "$SCRIPT_DIR/lib/wtx/open.sh"
 source "$SCRIPT_DIR/lib/wtx/session.sh"
 
 wtx::main "$@"
