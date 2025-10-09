@@ -15,6 +15,7 @@ setup() {
   mkdir -p "$HOME"
   unset WTX_UV_ENV
   unset TMUX
+  export WTX_BIN="$BATS_TEST_DIRNAME/../wtx"
 }
 
 teardown() {
@@ -29,7 +30,7 @@ teardown() {
 }
 
 wtx() {
-  (cd "$REPO_ROOT" && "$BATS_TEST_DIRNAME/../wtx" "$@")
+  (cd "$REPO_ROOT" && "$WTX_BIN" "$@")
 }
 
 sanitize() {
@@ -52,10 +53,13 @@ sanitize() {
   branch="feature/test-cmd"
   run wtx "$branch" --no-open -c "echo RUN_MARKER"
   [ "$status" -eq 0 ]
-  sleep 1
   ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "$branch")"
-  run tmux capture-pane -t "$ses" -p
-  [ "$status" -eq 0 ]
+  for attempt in $(seq 1 10); do
+    run tmux capture-pane -t "$ses" -p
+    [ "$status" -eq 0 ] || sleep 0.2
+    [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]] && break
+    sleep 0.2
+  done
   [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]]
   [[ "$output" == *"RUN_MARKER"* ]]
 }
@@ -89,9 +93,14 @@ sanitize() {
 @test "tmux ready flag set" {
   run wtx ready-branch --no-open
   [ "$status" -eq 0 ]
-  sleep 1
   ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "ready-branch")"
-  run tmux show-option -t "$ses" -v @wtx_ready
+  for attempt in $(seq 1 10); do
+    run tmux show-option -t "$ses" -v @wtx_ready
+    if [ "$status" -eq 0 ] && [ "$output" = "1" ]; then
+      break
+    fi
+    sleep 0.2
+  done
   [ "$status" -eq 0 ]
   [ "$output" = "1" ]
 }
@@ -133,4 +142,42 @@ EOF
   [ "$status" -eq 0 ]
   count_after=$(git -C "$REPO_ROOT" log --pretty=%s "$branch" | grep -c '^WTX_COMMAND:')
   [ "$count_after" -eq 2 ]
+}
+
+@test "post-commit hook installs and broadcasts to parent" {
+  run wtx --no-open
+  [ "$status" -eq 0 ]
+  hook="$REPO_ROOT/.git/hooks/post-commit"
+  [ -f "$hook" ]
+  run grep -q '# wtx post-commit hook' "$hook"
+  [ "$status" -eq 0 ]
+
+  parent_branch="wtx/main-1"
+  parent_wt="$(dirname "$REPO_ROOT")/$(basename "$REPO_ROOT").worktrees/$(sanitize "$parent_branch")"
+  run bash -c "cd '$parent_wt' && '$WTX_BIN' --no-open"
+  [ "$status" -eq 0 ]
+
+  child_branch="wtx/${parent_branch}-1"
+  child_root="$(dirname "$parent_wt")/$(basename "$parent_wt").worktrees"
+  child_wt="$child_root/$(sanitize "$child_branch")"
+  [ -d "$child_wt" ]
+  parent_session="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "wtx/main-1")"
+  pipe_log="$TEST_ROOT/pipe.log"
+  tmux pipe-pane -o -t "$parent_session" "cat >>'$pipe_log'"
+
+  echo "child" >>"$child_wt/README.md"
+  git -C "$child_wt" add README.md
+  git -C "$child_wt" commit -m "child commit" >/dev/null
+  run bash -c "cd '$child_wt' && '$WTX_BIN' --_post-commit"
+  [ "$status" -eq 0 ]
+  sleep 1
+
+  tr -d '\r' <"$pipe_log" | grep -q '# \[wtx] wtx/wtx/main-1-1 commit'
+}
+
+@test "invalid messaging policy exits" {
+  export WTX_MESSAGING_POLICY=bogus
+  run wtx --no-open
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"Invalid WTX_MESSAGING_POLICY"* ]]
 }
