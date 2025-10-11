@@ -6,7 +6,7 @@ Legend
 
 ⸻
 0) Shell hygiene & mode (residual)
-[ ] 0.2 (P6 prereq) need() hardening & tool verification
+[x] 0.2 (P6 prereq) need() hardening & tool verification
     ☐ implement need() once at top (already drafted) — keep pure POSIX test
     ☐ on startup: require git; capture missing into MISSING=()
     ☐ detect at least one of tmux|screen; else exit 2 with hint
@@ -15,7 +15,7 @@ Legend
 
 ⸻
 1) Arg parsing (P6, P12–P16, P65a/99)
-[ ] 1.1 Robust parser
+[x] 1.1 Robust parser
     ☐ Support: NAME?  -c CMD  --no-open  --mux {auto,tmux,screen}  --from REF
     ☐ Reserved (unimplemented → hard error exit 78): --close --close-merge --close-force
     ☐ Flags: --dry-run (only meaningful for separate wtx-prune tool), --verbose, --delete-branches (ignored here; used by wtx-prune), --no-git-logging
@@ -40,11 +40,11 @@ Legend
 
 ⸻
 6) Per-repo uv env (P26–P29, P95)
-[ ] 6.1 Default path now: $(git rev-parse --git-common-dir)/../.venv (no migration logic needed)
-[ ] 6.2 Honour $WTX_UV_ENV override
-[ ] 6.3 Create with: uv venv "$WTX_UV_ENV" (idempotent)
-[ ] 6.4 Activate: prepend bin to PATH in init script (ensure no duplicate prepend)
-[ ] 6.5 Test: create two branches → env created once (see Tests section)
+[x] 6.1 Default path now: $(git rev-parse --git-common-dir)/../.venv (no migration logic needed)
+[x] 6.2 Honour $WTX_UV_ENV override
+[x] 6.3 Create with: uv venv "$WTX_UV_ENV" (idempotent)
+[x] 6.4 Activate: prepend bin to PATH in init script (ensure no duplicate prepend)
+[x] 6.5 Test: create two branches → env created once (see Tests section)
 
 ⸻
 7) pnpm install (implemented) — add test for lockfile change (P79)
@@ -57,7 +57,7 @@ Legend
 
 ⸻
 10) Readiness probe (P39)
-[ ] 10.1 tmux ready helper
+[x] 10.1 tmux ready helper
     ☐ Provide function: wtx_tmux_ready() { tmux show-option -t "$SES_NAME" -v @wtx_ready 2>/dev/null | grep -q '^1$'; }
     ☐ Add small retry loop (5×40ms) to mitigate race with init script
     ☐ Screen: write readiness file "$WTX_GIT_DIR/state/$WORKTREE_NAME.ready" (NOT inside worktree) from init banner, then probe with [ -f ]. Avoids dirtying working tree.
@@ -65,36 +65,36 @@ Legend
 
 ⸻
 11) Messaging (P49–P53)
-[ ] 11.1 Session discovery (tmux first; screen deferred for messaging)
+[x] 11.1 Session discovery (tmux first; screen deferred for messaging)
     ☐ tmux list-sessions -F '#{session_name}' | grep '^wtx\.'
     ☐ For each candidate read @wtx_repo_id; keep only matching current repo id
     ☐ Also store @wtx_branch (set during spinup) to avoid reverse-parsing names
-[ ] 11.2 Relation map
+[x] 11.2 Relation map
     ☐ Load state JSON for each session (branch,parent_branch)
     ☐ Build: parent_of[child]=parent; children_of[parent]+=child
-[ ] 11.3 Policy resolution (enum: parent|children|parent+children|all)
+[x] 11.3 Policy resolution (enum: parent|children|parent+children|all)
     ☐ parent → at most one direct parent (if any)
     ☐ children → direct children_of[current]
     ☐ parent+children → union
     ☐ all → BFS: queue starts with parent + children; while queue: pop b; add its parent (if any) and its children; maintain visited set (branch names) to prevent cycles
     ☐ Invalid value → error exit 64
-[ ] 11.4 Commit hook installation (always)
+[x] 11.4 Commit hook installation (always)
     ☐ On every wtx run ensure .git/hooks/post-commit exists & contains wtx marker
     ☐ If absent: create executable hook with:
        #!/usr/bin/env bash\n[ -x "$(command -v wtx)" ] || exit 0\nwtx --_post-commit || true
     ☐ Idempotent: detect marker line '# wtx post-commit hook'
-[ ] 11.5 Broadcast trigger
+[x] 11.5 Broadcast trigger
     ☐ Only on post-commit (hook path) → wtx invoked with --_post-commit
     ☐ Skip on spinup and -c (no duplication / spam)
-[ ] 11.6 Compose message
+[x] 11.6 Compose message
     ☐ Fetch latest commit: git log -1 --pretty=format:'%h %s'
     ☐ Sanitize: replace newlines with spaces; strip control chars
     ☐ Format: "# [wtx] $BRANCH_NAME commit $SHORT_SHA \"$SUBJECT\""
-[ ] 11.7 Send
+[x] 11.7 Send
     ☐ For each resolved target session: tmux send-keys -t session "$line" C-m (ignore failures unless --verbose)
-[ ] 11.8 Cycle safety
+[x] 11.8 Cycle safety
     ☐ BFS visited set prevents infinite traversal even if parent pointers corrupted
-[ ] 11.9 Tests: deep chain, cycle injection (manually edit parent), invalid policy, branch with slash & colon
+[x] 11.9 Tests: deep chain, cycle injection (manually edit parent), invalid policy, branch with slash & colon
 
 ⸻
 12) Prune tool (separate executable wtx-prune) (P54–P61)
@@ -120,12 +120,12 @@ Legend
 
 ⸻
 13) Git commit logging (P65a, P99)
-[ ] 13.1 Default ON (unless --no-git-logging)
-[ ] 13.2 Spinup: git commit --allow-empty -m "WTX_SPINUP: branch=$BRANCH_NAME from=$FROM_REF"
-[ ] 13.3 -c path: prior to send → git commit --allow-empty -m "WTX_COMMAND: $CMD" (sanitize: newline→space, length<=200, strip control)
-[ ] 13.4 No additional commits for broadcast (post-commit already exists)
+[x] 13.1 Default ON (unless --no-git-logging)
+[x] 13.2 Spinup: git commit --allow-empty -m "WTX_SPINUP: branch=$BRANCH_NAME from=$FROM_REF"
+[x] 13.3 -c path: prior to send → git commit --allow-empty -m "WTX_COMMAND: $CMD" (sanitize: newline→space, length<=200, strip control)
+[x] 13.4 No additional commits for broadcast (post-commit already exists)
 [ ] 13.5 Docs: warning about secrets (users expected not to put tokens in commits)
-[ ] 13.6 Tests: with & without --no-git-logging counts
+[x] 13.6 Tests: with & without --no-git-logging counts
 
 ⸻
 14) Concurrency cleanup (residual)
@@ -161,13 +161,13 @@ Legend
 [ ] 17.2 Log chmod 700 (only first time) → detection via test -d + ! -f .perm_stamp
 [ ] 17.3 Output normalization: each resource emits status created|reused|skipped|missing
 [ ] 17.4 Performance timing instrumentation (P69–P71): record ms for phases (enable with --verbose)
-[ ] 17.5 open=spawned|suppressed|failed token added to banner actions list (after GUI implemented)
+[x] 17.5 open=spawned|suppressed|failed token added to banner actions list (after GUI implemented)
 [ ] 17.6 Deterministic banner ordering: env, pnpm, session, open, timing(optional)
 
 ⸻
 Future (deferred features kept brief)
   • Close workflow (--close*, merge) — separate spec
-  • GUI window spawn strategies (macOS AppleScript, iTerm2, kitty, etc.)
+  • GUI window spawn strategies (macOS AppleScript, iTerm2, kitty, etc.) — completed
   • --debug verbose categories (timing, decisions)
   • Notifications (macOS / Linux)
 
