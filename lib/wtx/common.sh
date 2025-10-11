@@ -56,6 +56,9 @@ Flags:
   --no-git-logging  Disable git commit logging for spinup/-c
   --_post-commit    Internal: invoked by git hook to broadcast commit messages
   --help            This help message
+
+Environment:
+  WTX_OPEN_COMMAND  Override launcher executable; receives the attach command as $1
 USAGE
 }
 

@@ -45,6 +45,7 @@ Legend
 [x] 6.3 Create with: uv venv "$WTX_UV_ENV" (idempotent)
 [x] 6.4 Activate: prepend bin to PATH in init script (ensure no duplicate prepend)
 [x] 6.5 Test: create two branches → env created once (see Tests section)
+[ ] this doesn't work: Why are we not entering the venv when starting a new screen or tmux wtx session?
 
 ⸻
 7) pnpm install (implemented) — add test for lockfile change (P79)
@@ -152,7 +153,7 @@ Legend
 [ ] 16.2 Quickstart example block
 [ ] 16.3 Security note (raw keystrokes + commit logging expectations)
 [ ] 16.4 Troubleshooting list (sessions, orphan worktrees, GUI open failure)
-[ ] 16.5 WTX_OPEN_STRATEGY documentation (planned)
+[x] 16.5 WTX_OPEN_COMMAND documentation (usage + env var)
 [ ] 16.6 Messaging policy examples
 [ ] 16.7 post-commit hook auto-install explanation & safe idempotence
 
@@ -174,3 +175,9 @@ Future (deferred features kept brief)
 ⸻
 End of remaining plan.
 
+name@name wtx_main-1 % ./wtx wtx/main-1
+tools: git:ok tmux:ok screen:ok uv:ok pnpm:miss
+Preparing worktree (checking out 'wtx/main-1')
+fatal: 'wtx/main-1' is already checked out at '/Users/name/subagents_codex.worktrees/wtx_main-1'
+name@name wtx_main-1 % 
+[ ] fix that: if something is already checked out, wtx should reuse that branch

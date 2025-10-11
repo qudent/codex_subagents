@@ -14,9 +14,26 @@ setup() {
   export HOME="$TEST_ROOT/home"
   mkdir -p "$HOME"
   unset WTX_UV_ENV
+  export UV_CACHE_DIR="$TEST_ROOT/uv-cache"
   unset TMUX
-  unset WTX_OPEN_STRATEGY
+  export TMUX_TMPDIR="$TEST_ROOT/tmux"
+  mkdir -p "$TMUX_TMPDIR"
+  chmod 1777 "$TMUX_TMPDIR"
+  unset WTX_OPEN_COMMAND
   export WTX_BIN="$BATS_TEST_DIRNAME/../wtx"
+  mkdir -p "$TEST_ROOT/bin"
+  cat >"$TEST_ROOT/bin/uv" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "venv" ]; then
+  mkdir -p "\$2/bin"
+  echo "venv" >>"$TEST_ROOT/uv_calls"
+  exit 0
+fi
+echo "unsupported" >&2
+exit 1
+EOF
+  chmod +x "$TEST_ROOT/bin/uv"
+  export PATH="$TEST_ROOT/bin:$PATH"
 }
 
 teardown() {
@@ -66,15 +83,21 @@ sanitize() {
 }
 
 @test "screen backend prints banner" {
+  set -x
+  if ! command -v screen >/dev/null 2>&1; then
+    skip "screen not installed"
+  fi
   branch="screen-test"
   export MUX=screen
   run wtx "$branch" --no-open
   unset MUX
   [ "$status" -eq 0 ]
-  sleep 1
+  sleep 2
   ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "$branch")"
   hardcopy="$TEST_ROOT/screen.out"
   screen -S "$ses" -p 0 -X hardcopy "$hardcopy"
+  ls_output=$(ls -l "$hardcopy")
+  echo "ls output: $ls_output" >&2
   run cat "$hardcopy"
   [ "$status" -eq 0 ]
   [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]]
@@ -107,19 +130,7 @@ sanitize() {
 }
 
 @test "uv env created once" {
-  mkdir -p "$TEST_ROOT/bin"
-  cat >"$TEST_ROOT/bin/uv" <<'EOF'
-#!/usr/bin/env bash
-if [ "$1" = "venv" ]; then
-  mkdir -p "$2/bin"
-  echo "venv" >>"$TEST_ROOT/uv_calls"
-  exit 0
-fi
-echo "unsupported" >&2
-exit 1
-EOF
-  chmod +x "$TEST_ROOT/bin/uv"
-  export PATH="$TEST_ROOT/bin:$PATH"
+  rm -f "$TEST_ROOT/uv_calls"
   unset WTX_UV_ENV
   run wtx uv-one --no-open
   [ "$status" -eq 0 ]
@@ -145,19 +156,34 @@ EOF
   [ "$count_after" -eq 2 ]
 }
 
-@test "print strategy suppresses GUI open" {
-  export WTX_OPEN_STRATEGY=print
-  run wtx gui-print
+@test "override open command runs custom handler" {
+  override="$TEST_ROOT/open-override.sh"
+  cat >"$override" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$1" >> "$TEST_ROOT/open.log"
+EOF
+  chmod +x "$override"
+  export WTX_OPEN_COMMAND="$override"
+
+  run wtx gui-override
   [ "$status" -eq 0 ]
   [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]
+
+  sleep 1
+  log_capture="$TEST_ROOT/open.log"
+  [ -f "$log_capture" ]
+  run cat "$log_capture"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tmux attach -t"* ]]
+
   log_file="$REPO_ROOT/.git/wtx/logs/$(date +%F).log"
   run tail -n 1 "$log_file"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"open:suppressed"* ]]
+  [[ "$output" == *"open:spawned"* ]]
 }
 
-@test "failed GUI strategy falls back to attach instructions" {
-  export WTX_OPEN_STRATEGY=nonexistent
+@test "missing open command records failure" {
+  export WTX_OPEN_COMMAND=/nonexistent/wtx-open
   run wtx gui-fallback
   [ "$status" -eq 0 ]
   [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]

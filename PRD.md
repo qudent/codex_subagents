@@ -228,17 +228,15 @@ Point 45. [ ] Confirm hot path completes in ≤25 ms on modern hardware. — Per
 
 ⸻
 
-7. GUI / OS-level window behavior (updated)
+7. GUI behavior
 
-Point 46. [ ] On successful (create|reuse) if --no-open NOT set: spawn/focus a NEW terminal window (never hijack current terminal) using platform strategy: macOS (osascript Terminal / iTerm2 if available), Linux/X11 ($TERMINAL or x-terminal-emulator -e), Wayland (foot/kitty/alacritty fallback), else print attach instructions only.
+Point 46. [x] If --no-open is clear, wtx best-effort opens a terminal window: macOS via AppleScript into Terminal.app, everything else via `xterm -e bash -lc '<attach>'`.
 
-    Point 46a. [ ] Strategy order configurable via env WTX_OPEN_STRATEGY (comma list: iterm,apple-terminal,kitty,alacritty,wezterm,gnome-terminal,foot,xterm,print). First succeeding command used.
-
-    Point 46b. [ ] Each strategy launches a window already running `tmux attach -t <session>` (or screen -r) and foregrounds it.
+    Point 46a. [x] Users can override the launcher by setting $WTX_OPEN_COMMAND to an executable; wtx invokes it with the attach command as the first argument.
 
 Point 47. [x] --no-open means: do NOT spawn/focus any GUI window; always just print attach instructions to stdout (idempotent; safe in CI).
 
-Point 48. [ ] If all spawn strategies fail → fall back to printing attach command (always printed anyway for scripting) and exit 0 (no hard failure).
+Point 48. [x] If the launch attempt fails (missing Terminal/xterm/etc.) → still print the attach command and exit 0.
 
 Point 48a. [ ] Output explicitly states: open=spawned|suppressed|failed.
 
@@ -413,9 +411,9 @@ Point 75. [x] Tests: — Automated via tests/wtx.bats.
         • parent+children: union of above
         • all: reaches all ancestors & descendants without duplication.
 
-    Point 81c. [ ] GUI spawn test (macOS mocked osascript & Linux fake $WTX_OPEN_STRATEGY) ensures open=spawned and suppressed.
+    Point 81c. [x] GUI override test ($WTX_OPEN_COMMAND) ensures attach command forwarded and open:spawned logged.
 
-    Point 81d. [ ] Attach suppression with --no-open prints attach command but does not spawn window (detect via mock).
+    Point 81d. [x] Missing override command test ensures wtx prints attach instructions and records open:failed.
 
     Point 81e. [ ] Git logging test: run wtx -c twice, assert two empty commits with prefix WTX_COMMAND unless --no-git-logging flag used (then zero). (Covers Point 99.)
 Point 82. [x] Run tests for both tmux and screen backends.
@@ -438,7 +436,7 @@ wtx feature-x -c 'pytest -q'
 # open again later
 wtx feature-x
 
-Point 84. [ ] Explain environment variables (WTX_GIT_DIR, WTX_UV_ENV, WTX_MESSAGING_POLICY values: all|parent|children|parent+children, WTX_OPEN_STRATEGY).
+Point 84. [x] Explain environment variables (WTX_GIT_DIR, WTX_UV_ENV, WTX_MESSAGING_POLICY values: all|parent|children|parent+children, WTX_OPEN_COMMAND).
 
 
 
@@ -450,7 +448,7 @@ Point 86. [ ] Include troubleshooting: “session exists”, “worktree already
 
 
 
-Point 86a. [ ] Document WTX_OPEN_STRATEGY order and fallback behavior.
+Point 86a. [x] Document how $WTX_OPEN_COMMAND overrides the default Terminal/xterm launcher and how attach command is passed in.
 
 Point 86b. [ ] Document git commit logging feature & --no-git-logging flag; include secrecy warning (implements Point 99 docs).
 ⸻
