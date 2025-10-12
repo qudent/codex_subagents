@@ -144,40 +144,46 @@ for branch in sorted(targets):
 PY
 }
 
-wtx::collect_repo_sessions() {
-  if ! need tmux; then
-    return 0
-  fi
-  local sessions
-  sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
-  [ -n "$sessions" ] || return 0
-  printf '%s\n' "$sessions" | while read -r ses; do
-    case "$ses" in
-      wtx_*)
-        local repo_id
-        repo_id=$(tmux show-option -t "$ses" -v @wtx_repo_id 2>/dev/null || true)
-        [ "$repo_id" = "$REPO_ID" ] || continue
-        local branch_name
-        branch_name=$(tmux show-option -t "$ses" -v @wtx_branch 2>/dev/null || true)
-        [ -n "$branch_name" ] || continue
-        printf '%s\t%s\n' "$ses" "$branch_name"
-        ;;
-    esac
-  done
+wtx::session_name_for_branch() {
+  local branch="$1"
+  printf 'wtx_%s_%s' "$(wtx::sanitize_name "$REPO_BASENAME")" "$(wtx::sanitize_name "$branch")"
 }
 
-wtx::send_tmux_broadcast() {
-  local message="$1"
-  local targets="$2"
-  [ -n "$targets" ] || return 0
-  local sessions
-  sessions=$(wtx::collect_repo_sessions)
-  [ -n "$sessions" ] || return 0
-  printf '%s\n' "$sessions" | while IFS=$'\t' read -r ses branch; do
-    if printf '%s\n' "$targets" | grep -Fxq "$branch"; then
-      tmux send-keys -t "$ses" "$message" C-m
-    fi
-  done
+wtx::session_pty_for_branch() {
+  local branch="$1"
+  printf '%s/sessions/%s.pty' "$WTX_GIT_DIR_ABS" "$(wtx::session_name_for_branch "$branch")"
+}
+
+wtx::session_pid_file_for_branch() {
+  local branch="$1"
+  printf '%s/sessions/%s.pid' "$WTX_GIT_DIR_ABS" "$(wtx::session_name_for_branch "$branch")"
+}
+
+wtx::session_running_for_branch() {
+  local branch="$1"
+  local pid_file
+  pid_file=$(wtx::session_pid_file_for_branch "$branch")
+  [ -f "$pid_file" ] || return 1
+  local pid
+  pid=$(cat "$pid_file" 2>/dev/null || true)
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  local pty
+  pty=$(wtx::session_pty_for_branch "$branch")
+  [ -e "$pty" ] || return 1
+  return 0
+}
+
+wtx::send_branch_message() {
+  local branch="$1"
+  local payload="$2"
+  if ! wtx::session_running_for_branch "$branch"; then
+    return 1
+  fi
+  local pty
+  pty=$(wtx::session_pty_for_branch "$branch")
+  printf '%s\n' "$payload" | socat - "FILE:$pty,raw,echo=0" >/dev/null 2>&1
 }
 
 wtx::install_post_commit_hook() {
@@ -218,7 +224,7 @@ HOOK
 
 wtx::handle_post_commit() {
   wtx::normalize_messaging_policy
-  if ! need tmux; then
+  if ! need socat; then
     return 0
   fi
   local branch
@@ -246,5 +252,13 @@ wtx::handle_post_commit() {
 $targets
 EOF
   fi
-  wtx::send_tmux_broadcast "$message" "$filtered"
+  if [ -n "$filtered" ]; then
+    while read -r target_branch; do
+      [ -n "$target_branch" ] || continue
+      [ "$target_branch" = "$branch" ] && continue
+      wtx::send_branch_message "$target_branch" "$message" || true
+    done <<EOF
+$filtered
+EOF
+  fi
 }

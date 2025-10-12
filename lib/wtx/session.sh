@@ -4,7 +4,7 @@ wtx::install_init_template() {
   local init="$WT_STATE_DIR/wtx-init.sh"
   if [ ! -f "$init" ]; then
     cat >"$init" <<'INIT'
-# wtx init (sourced inside tmux/screen)
+# wtx init (sourced inside socat shell)
 if [ -n "${WTX_UV_ENV:-}" ] && [ -d "$WTX_UV_ENV/bin" ]; then
   case ":$PATH:" in
     *:"$WTX_UV_ENV/bin":*) : ;;
@@ -16,35 +16,12 @@ if [ "${WTX_PROMPT:-0}" = "1" ]; then
   PS1="[wtx:${BRANCH_NAME}] $PS1"
 fi
 printf 'wtx: repo=%s branch=%s parent=%s from=%s actions=[%s]\n' "${REPO_BASENAME:-?}" "${BRANCH_NAME:-?}" "${PARENT_LABEL:-?}" "${FROM_REF:-?}" "${ACTIONS:-?}"
-if command -v tmux >/dev/null 2>&1 && [ -n "${SES_NAME:-}" ]; then
-  tmux set-option -t "$SES_NAME" @wtx_ready 1 2>/dev/null || true
-fi
 if [ -n "${READY_FILE:-}" ]; then
   : >"$READY_FILE"
 fi
 INIT
   fi
   INIT_SCRIPT="$init"
-}
-
-wtx::resolve_backend() {
-  if [ "$MUX" = "auto" ]; then
-    if need tmux; then
-      MUX=tmux
-    elif need screen; then
-      MUX=screen
-    fi
-  fi
-
-  if [ "$MUX" = "tmux" ] && ! need tmux; then
-    echo "tmux backend requested but tmux not available." >&2
-    exit 2
-  fi
-
-  if [ "$MUX" = "screen" ] && ! need screen; then
-    echo "screen backend requested but screen not available." >&2
-    exit 2
-  fi
 }
 
 wtx::derive_parent_label() {
@@ -62,52 +39,93 @@ wtx::compute_session_name() {
   SES_NAME="wtx_${ses_repo}_${ses_branch}"
 }
 
-wtx::compute_attach_command() {
-  case "$MUX" in
-    tmux)
-      ATTACH_COMMAND="tmux attach -t $SES_NAME"
-      ;;
-    screen)
-      ATTACH_COMMAND="screen -r $SES_NAME"
-      ;;
-    *)
-      ATTACH_COMMAND=""
-      ;;
-  esac
+wtx::prepare_session_paths() {
+  SESSION_DIR="$WTX_GIT_DIR_ABS/sessions"
+  mkdir -p "$SESSION_DIR"
+  SES_PTY="$SESSION_DIR/$SES_NAME.pty"
+  SES_PID_FILE="$SESSION_DIR/$SES_NAME.pid"
+  SES_LOG="$SESSION_DIR/$SES_NAME.log"
 }
 
-wtx::launch_tmux_session() {
-  SESSION_STATUS="reused"
-  if ! tmux has-session -t "$SES_NAME" 2>/dev/null; then
-    tmux new-session -d -s "$SES_NAME" -c "$WT_DIR"
-    SESSION_STATUS="created"
+wtx::session_pid_alive() {
+  if [ ! -f "$SES_PID_FILE" ]; then
+    return 1
   fi
-  tmux set-option -t "$SES_NAME" @wtx_repo_id "$REPO_ID" 2>/dev/null || true
-  tmux set-option -t "$SES_NAME" @wtx_branch "$BRANCH_NAME" 2>/dev/null || true
+  local pid
+  pid=$(cat "$SES_PID_FILE" 2>/dev/null || true)
+  if [ -z "$pid" ]; then
+    rm -f "$SES_PID_FILE" || true
+    return 1
+  fi
+  if kill -0 "$pid" 2>/dev/null && [ -e "$SES_PTY" ]; then
+    return 0
+  fi
+  rm -f "$SES_PID_FILE" || true
+  return 1
 }
 
-wtx::launch_screen_session() {
-  SESSION_STATUS="reused"
-  if ! screen -ls | grep -q "\.${SES_NAME}[[:space:]]"; then
-    screen -dmS "$SES_NAME" sh -c "cd $(printf %q "$WT_DIR"); exec \$SHELL"
-    SESSION_STATUS="created"
+wtx::wait_for_session_channel() {
+  local attempts=0
+  while [ $attempts -lt 50 ]; do
+    if [ -e "$SES_PTY" ]; then
+      return 0
+    fi
+    sleep 0.02
+    attempts=$(( attempts + 1 ))
+  done
+  return 1
+}
+
+wtx::start_socat_process() {
+  rm -f "$SES_PTY" "$SES_PID_FILE"
+  SESSION_STATUS="created"
+  local exec_cmd
+  exec_cmd=$(printf 'cd %s && exec ${SHELL:-bash} -i' "$(printf %q "$WT_DIR")")
+  if command -v setsid >/dev/null 2>&1; then
+    setsid socat -lf "$SES_LOG" PTY,link="$SES_PTY",rawer,echo=0,wait-slave EXEC:"$exec_cmd",pty,setsid,ctty >/dev/null 2>&1 &
+  else
+    socat -lf "$SES_LOG" PTY,link="$SES_PTY",rawer,echo=0,wait-slave EXEC:"$exec_cmd",pty,setsid,ctty >/dev/null 2>&1 &
+  fi
+  local pid=$!
+  sleep 0.05
+  if ! kill -0 "$pid" 2>/dev/null; then
+    SESSION_STATUS="failed"
+    return 1
+  fi
+  echo "$pid" >"$SES_PID_FILE"
+  if ! wtx::wait_for_session_channel; then
+    SESSION_STATUS="failed"
+    return 1
+  fi
+  return 0
+}
+
+wtx::ensure_session_process() {
+  if wtx::session_pid_alive; then
+    SESSION_STATUS="reused"
+    return 0
+  fi
+  wtx::start_socat_process
+}
+
+wtx::compute_attach_command() {
+  if [ -e "$SES_PTY" ]; then
+    ATTACH_COMMAND="socat - FILE:$SES_PTY,raw,echo=0"
+  else
+    ATTACH_COMMAND=""
   fi
 }
 
 wtx::launch_session() {
   wtx::derive_parent_label
   wtx::compute_session_name
-  case "$MUX" in
-    tmux)
-      wtx::launch_tmux_session
-      ;;
-    screen)
-      wtx::launch_screen_session
-      ;;
-    *)
-      SESSION_STATUS="skipped"
-      ;;
-  esac
+  wtx::prepare_session_paths
+  SESSION_STATUS="failed"
+  if wtx::ensure_session_process; then
+    wtx::compute_attach_command
+  else
+    ATTACH_COMMAND=""
+  fi
 }
 
 wtx::maybe_spawn_window() {
@@ -134,38 +152,25 @@ wtx::build_env_exports() {
     "$WTX_UV_ENV" "$REPO_BASENAME" "$BRANCH_NAME" "$PARENT_LABEL" "$FROM_REF" "$ACTIONS" "$WTX_PROMPT" "$READY_FILE" "$SES_NAME"
 }
 
+wtx::send_to_session() {
+  local payload="$1"
+  if [ -z "$SES_PTY" ] || [ ! -e "$SES_PTY" ]; then
+    return 1
+  fi
+  printf '%s' "$payload" | socat - "FILE:$SES_PTY,raw,echo=0" >/dev/null 2>&1
+}
+
 wtx::send_init_to_session() {
-  local env_exports
+  local env_exports payload
   env_exports=$(wtx::build_env_exports)
-  case "$MUX" in
-    tmux)
-      tmux send-keys -t "$SES_NAME" "$env_exports . $(printf %q "$INIT_SCRIPT")" C-m
-      ;;
-    screen)
-      screen -S "$SES_NAME" -p 0 -X stuff "$env_exports . $(printf %q "$INIT_SCRIPT")$(printf '\r')"
-      ;;
-  esac
+  payload="cd $(printf %q "$WT_DIR")"$'\n'
+  payload+="$env_exports . $(printf %q "$INIT_SCRIPT")"$'\n'
+  wtx::send_to_session "$payload"
 }
 
-wtx::tmux_ready() {
-  tmux show-option -t "$SES_NAME" -v @wtx_ready 2>/dev/null | grep -q '^1$'
-}
-
-wtx::wait_for_tmux_ready() {
+wtx::wait_for_ready_file() {
   local i=0
-  while [ $i -lt 5 ]; do
-    if wtx::tmux_ready; then
-      return 0
-    fi
-    sleep 0.04
-    i=$(( i + 1 ))
-  done
-  return 1
-}
-
-wtx::wait_for_screen_ready() {
-  local i=0
-  while [ $i -lt 5 ]; do
+  while [ $i -lt 50 ]; do
     if [ -n "$READY_FILE" ] && [ -f "$READY_FILE" ]; then
       return 0
     fi
@@ -177,16 +182,9 @@ wtx::wait_for_screen_ready() {
 
 wtx::dispatch_command() {
   [ -n "$CMD" ] || return 0
-  case "$MUX" in
-    tmux)
-      wtx::wait_for_tmux_ready || true
-      tmux send-keys -t "$SES_NAME" "$CMD" C-m
-      ;;
-    screen)
-      wtx::wait_for_screen_ready || true
-      screen -S "$SES_NAME" -p 0 -X stuff "$CMD$(printf '\r')"
-      ;;
-  esac
+  wtx::wait_for_ready_file || true
+  local payload="$CMD"$'\n'
+  wtx::send_to_session "$payload"
 }
 
 wtx::write_log_entry() {
@@ -224,9 +222,7 @@ wtx::main() {
   wtx::ensure_pnpm
   wtx::install_init_template
   wtx::install_post_commit_hook
-  wtx::resolve_backend
   wtx::launch_session
-  wtx::compute_attach_command
 
   wtx::maybe_spawn_window || true
   ACTIONS="env:${ENV_STATUS}, pnpm:${PNPM_STATUS}, session:${SESSION_STATUS}, open:${OPEN_STATUS}"

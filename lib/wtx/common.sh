@@ -35,21 +35,19 @@ wtx::print_tool_summary() {
 
 wtx::usage() {
   cat <<'USAGE'
-wtx — create/reuse a git worktree and open a tmux/screen session with a one-line banner.
+wtx — create/reuse a git worktree and open a socat-managed shell with a one-line banner.
 
-Usage: wtx [NAME] [-c CMD] [--from REF] [--mux auto|tmux|screen] [--no-open]
+Usage: wtx [NAME] [-c CMD] [--from REF] [--no-open]
             [--dry-run] [--verbose] [--delete-branches] [--no-git-logging]
             [--_post-commit]
 Examples:
-  wtx                       # auto-name branch wtx/<parent>-NN, create worktree + session
+  wtx                       # auto-name branch wtx/<parent>-NN, create worktree + shell
   wtx feature-xyz -c 'pytest -q'   # send raw keystrokes after session is ready
-  wtx --mux screen          # use GNU screen if you prefer
 
 Flags:
-  -c CMD            Send raw keystrokes to pane (exactly, then Enter)
+  -c CMD            Send raw keystrokes to the shell (exactly, then Enter)
   --from REF        Use REF as starting point (default: HEAD)
-  --mux MODE        auto|tmux|screen   (default: auto)
-  --no-open         Do not attach/switch to the session; only print attach command
+  --no-open         Do not attach/switch to the shell; only print attach command
   --dry-run         Ignored (reserved for wtx-prune)
   --delete-branches Ignored (reserved for wtx-prune)
   --verbose         Print extra diagnostics to stderr
@@ -64,8 +62,6 @@ USAGE
 
 wtx::check_required_tools() {
   wtx::reset_tool_tracking
-  local have_tmux=0
-  local have_screen=0
 
   if need git; then
     wtx::append_tool_summary "git:ok"
@@ -74,22 +70,11 @@ wtx::check_required_tools() {
     wtx::record_missing_tool git
   fi
 
-  if need tmux; then
-    have_tmux=1
-    wtx::append_tool_summary "tmux:ok"
+  if need socat; then
+    wtx::append_tool_summary "socat:ok"
   else
-    wtx::append_tool_summary "tmux:miss"
-  fi
-
-  if need screen; then
-    have_screen=1
-    wtx::append_tool_summary "screen:ok"
-  else
-    if [ $have_tmux -eq 1 ]; then
-      wtx::append_tool_summary "screen:skip"
-    else
-      wtx::append_tool_summary "screen:miss"
-    fi
+    wtx::append_tool_summary "socat:miss"
+    wtx::record_missing_tool socat
   fi
 
   if need uv; then
@@ -102,10 +87,6 @@ wtx::check_required_tools() {
     wtx::append_tool_summary "pnpm:ok"
   else
     wtx::append_tool_summary "pnpm:miss"
-  fi
-
-  if [ $have_tmux -eq 0 ] && [ $have_screen -eq 0 ]; then
-    wtx::record_missing_tool "tmux|screen"
   fi
 
   wtx::print_tool_summary

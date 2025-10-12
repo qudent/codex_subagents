@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wtx — worktree + tmux/screen launcher (modular build)
+# wtx — worktree + socat-managed shell launcher (modular build)
 
 set -euo pipefail
 IFS=$'\n\t'

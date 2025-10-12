@@ -15,17 +15,13 @@ setup() {
   mkdir -p "$HOME"
   unset WTX_UV_ENV
   export UV_CACHE_DIR="$TEST_ROOT/uv-cache"
-  unset TMUX
-  export TMUX_TMPDIR="$TEST_ROOT/tmux"
-  mkdir -p "$TMUX_TMPDIR"
-  chmod 1777 "$TMUX_TMPDIR"
   unset WTX_OPEN_COMMAND
   export WTX_BIN="$BATS_TEST_DIRNAME/../wtx"
   mkdir -p "$TEST_ROOT/bin"
-  cat >"$TEST_ROOT/bin/uv" <<EOF
+  cat >"$TEST_ROOT/bin/uv" <<'EOF'
 #!/usr/bin/env bash
-if [ "\$1" = "venv" ]; then
-  mkdir -p "\$2/bin"
+if [ "$1" = "venv" ]; then
+  mkdir -p "$2/bin"
   echo "venv" >>"$TEST_ROOT/uv_calls"
   exit 0
 fi
@@ -37,11 +33,13 @@ EOF
 }
 
 teardown() {
-  tmux kill-server >/dev/null 2>&1 || true
-  if screen -ls >/dev/null 2>&1; then
-    # Kill any screen sessions we started (ignore errors if none)
-    screen -ls | awk '/\t/ {print $1}' | while read -r ses; do
-      screen -S "$ses" -X quit >/dev/null 2>&1 || true
+  if [ -d "$REPO_ROOT/.git/wtx/sessions" ]; then
+    for pid_file in "$REPO_ROOT/.git/wtx/sessions"/*.pid; do
+      [ -e "$pid_file" ] || continue
+      pid=$(cat "$pid_file" 2>/dev/null || true)
+      if [ -n "$pid" ]; then
+        kill "$pid" >/dev/null 2>&1 || true
+      fi
     done
   fi
   rm -rf "$TEST_ROOT"
@@ -67,40 +65,47 @@ sanitize() {
   [ -d "$(dirname "$REPO_ROOT")/$(basename "$REPO_ROOT").worktrees/wtx_main-1" ]
 }
 
-@test "tmux backend prints banner and runs -c command" {
+@test "socat session prints banner and runs -c command" {
   branch="feature/test-cmd"
   run wtx "$branch" --no-open -c "echo RUN_MARKER"
   [ "$status" -eq 0 ]
   ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "$branch")"
+  pty="$REPO_ROOT/.git/wtx/sessions/${ses}.pty"
   for attempt in $(seq 1 10); do
-    run tmux capture-pane -t "$ses" -p
-    [ "$status" -eq 0 ] || sleep 0.2
-    [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]] && break
-    sleep 0.2
+    [ -e "$pty" ] && break
+    sleep 0.1
   done
+  [ -e "$pty" ]
+  run python3 <<'PYR'
+import fcntl
+import os
+import sys
+import time
+
+pty_path = sys.argv[1]
+fd = os.open(pty_path, os.O_RDWR | os.O_NOCTTY)
+flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+end = time.time() + 2.0
+chunks = []
+while time.time() < end:
+    try:
+        data = os.read(fd, 4096)
+    except BlockingIOError:
+        data = b''
+    if data:
+        chunks.append(data)
+        if b'RUN_MARKER' in data and b'wtx:' in data:
+            break
+    time.sleep(0.05)
+
+os.close(fd)
+sys.stdout.write(b''.join(chunks).decode('utf-8', 'ignore'))
+PYR
+  [ "$status" -eq 0 ]
   [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]]
   [[ "$output" == *"RUN_MARKER"* ]]
-}
-
-@test "screen backend prints banner" {
-  set -x
-  if ! command -v screen >/dev/null 2>&1; then
-    skip "screen not installed"
-  fi
-  branch="screen-test"
-  export MUX=screen
-  run wtx "$branch" --no-open
-  unset MUX
-  [ "$status" -eq 0 ]
-  sleep 2
-  ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "$branch")"
-  hardcopy="$TEST_ROOT/screen.out"
-  screen -S "$ses" -p 0 -X hardcopy "$hardcopy"
-  ls_output=$(ls -l "$hardcopy")
-  echo "ls output: $ls_output" >&2
-  run cat "$hardcopy"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"wtx: repo=$(basename "$REPO_ROOT") branch=$branch"* ]]
 }
 
 @test "log records actions" {
@@ -114,19 +119,16 @@ sanitize() {
   [[ "$output" == *"session:"* ]]
 }
 
-@test "tmux ready flag set" {
-  run wtx ready-branch --no-open
+@test "ready file is created" {
+  branch="ready-branch"
+  run wtx "$branch" --no-open
   [ "$status" -eq 0 ]
-  ses="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "ready-branch")"
-  for attempt in $(seq 1 10); do
-    run tmux show-option -t "$ses" -v @wtx_ready
-    if [ "$status" -eq 0 ] && [ "$output" = "1" ]; then
-      break
-    fi
-    sleep 0.2
+  ready_file="$REPO_ROOT/.git/wtx/state/$(sanitize "$branch").ready"
+  for attempt in $(seq 1 25); do
+    [ -f "$ready_file" ] && break
+    sleep 0.05
   done
-  [ "$status" -eq 0 ]
-  [ "$output" = "1" ]
+  [ -f "$ready_file" ]
 }
 
 @test "uv env created once" {
@@ -160,21 +162,21 @@ sanitize() {
   override="$TEST_ROOT/open-override.sh"
   cat >"$override" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$1" >> "$TEST_ROOT/open.log"
+printf '%s\n' "$1" >> "$TEST_ROOT/open.log"
 EOF
   chmod +x "$override"
   export WTX_OPEN_COMMAND="$override"
 
   run wtx gui-override
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]
+  [[ "$output" == *"[wtx] Attach with: socat - FILE:"* ]]
 
   sleep 1
   log_capture="$TEST_ROOT/open.log"
   [ -f "$log_capture" ]
   run cat "$log_capture"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tmux attach -t"* ]]
+  [[ "$output" == *"socat - FILE:"* ]]
 
   log_file="$REPO_ROOT/.git/wtx/logs/$(date +%F).log"
   run tail -n 1 "$log_file"
@@ -186,7 +188,7 @@ EOF
   export WTX_OPEN_COMMAND=/nonexistent/wtx-open
   run wtx gui-fallback
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[wtx] Attach with: tmux attach -t "* ]]
+  [[ "$output" == *"[wtx] Attach with: socat - FILE:"* ]]
   log_file="$REPO_ROOT/.git/wtx/logs/$(date +%F).log"
   run tail -n 1 "$log_file"
   [ "$status" -eq 0 ]
@@ -210,17 +212,52 @@ EOF
   child_root="$(dirname "$parent_wt")/$(basename "$parent_wt").worktrees"
   child_wt="$child_root/$(sanitize "$child_branch")"
   [ -d "$child_wt" ]
+
   parent_session="wtx_$(sanitize "$(basename "$REPO_ROOT")")_$(sanitize "wtx/main-1")"
+  parent_pty="$REPO_ROOT/.git/wtx/sessions/${parent_session}.pty"
+  for attempt in $(seq 1 20); do
+    [ -e "$parent_pty" ] && break
+    sleep 0.05
+  done
+  [ -e "$parent_pty" ]
+
   pipe_log="$TEST_ROOT/pipe.log"
-  tmux pipe-pane -o -t "$parent_session" "cat >>'$pipe_log'"
+  python3 <<'PYR'
+import fcntl
+import os
+import sys
+import time
+
+pty_path, log_path = sys.argv[1:3]
+fd = os.open(pty_path, os.O_RDWR | os.O_NOCTTY)
+flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+deadline = time.time() + 6.0
+with open(log_path, 'wb') as log:
+    while time.time() < deadline:
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            chunk = b''
+        if chunk:
+            log.write(chunk)
+            log.flush()
+            if b'# [wtx]' in chunk:
+                break
+        time.sleep(0.05)
+
+os.close(fd)
+PYR
+  listener_pid=$!
 
   echo "child" >>"$child_wt/README.md"
   git -C "$child_wt" add README.md
   git -C "$child_wt" commit -m "child commit" >/dev/null
   run bash -c "cd '$child_wt' && '$WTX_BIN' --_post-commit"
   [ "$status" -eq 0 ]
-  sleep 1
 
+  wait "$listener_pid"
   tr -d '\r' <"$pipe_log" | grep -q '# \[wtx] wtx/wtx/main-1-1 commit'
 }
 

@@ -4,7 +4,6 @@ wtx::set_defaults() {
   NAME=""
   CMD=""
   FROM_REF="HEAD"
-  MUX="${MUX:-auto}"
   NO_OPEN=0
   VERBOSE=0
   GIT_LOGGING=1
@@ -32,10 +31,6 @@ wtx::parse_args() {
       --from)
         shift
         FROM_REF="${1:-HEAD}"
-        ;;
-      --mux)
-        shift
-        MUX="${1:-auto}"
         ;;
       --no-open)
         NO_OPEN=1
@@ -76,11 +71,4 @@ wtx::parse_args() {
     shift
   done
 
-  case "$MUX" in
-    auto|tmux|screen) ;;
-    *)
-      echo "Invalid mux backend: $MUX" >&2
-      exit 64
-      ;;
-  esac
 }
